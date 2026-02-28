@@ -15,7 +15,7 @@ def manual_control(env):
         if keys[pygame.K_ESCAPE]:
             running = False
 
-        forward_thrust = 5.0 if keys[pygame.K_UP] else 0.0
+        forward_thrust = 1 if keys[pygame.K_UP] else -1
         rot_thrust = 0.0
         if keys[pygame.K_LEFT]:
             rot_thrust -= 0.1
