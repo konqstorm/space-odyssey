@@ -1,0 +1,288 @@
+# agents.py
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.distributions import Normal, MultivariateNormal
+import numpy as np
+import copy
+
+class PolicyNetwork(nn.Module):
+    def __init__(self, input_dim, hidden_dim=64):
+        super().__init__()
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc_thrust = nn.Linear(hidden_dim, hidden_dim)
+        self.head_thrust = nn.Linear(hidden_dim, 2)
+        self.fc_torque = nn.Linear(hidden_dim, hidden_dim)
+        self.head_torque = nn.Linear(hidden_dim, 2)
+        
+    
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+
+        x_thrust = torch.relu(self.fc_thrust(x))
+        x_torque = torch.relu(self.fc_torque(x))
+
+        out_thrust = self.head_thrust(x_thrust)
+        out_torque = self.head_torque(x_torque)
+        
+        mean = torch.cat([
+            torch.tanh(out_thrust[:, 0:1]),
+            torch.tanh(out_torque[:, 0:1])
+        ], dim=-1)
+        log_std = torch.cat([
+            out_thrust[:, 1:2],
+            out_torque[:, 1:2]
+        ], dim=-1)
+        log_std = torch.clamp(log_std, -5, 2)
+        return mean, log_std
+
+
+class REINFORCEAgent:
+    def __init__(self, env, lr=3e-4, gamma=0.99, entropy_coeff=0.01, vf_coeff=0.5):
+        self.env = env
+        self.gamma = gamma
+        self.entropy_coeff = entropy_coeff
+        self.vf_coeff = vf_coeff
+        
+        self.policy = PolicyNetwork(env.observation_space.shape[0])
+        self.value = ValueNetwork(env.observation_space.shape[0])
+        
+        self.policy_optimizer = optim.Adam(self.policy.parameters(), lr=lr)
+        self.value_optimizer = optim.Adam(self.value.parameters(), lr=lr)
+
+    def select_action(self, state, deterministic=False):
+        state_t = torch.from_numpy(state).float().unsqueeze(0)
+        mean, log_std = self.policy(state_t)
+        std = torch.exp(log_std).clamp(1e-6, 10.0)
+        
+        if deterministic:
+            return mean.squeeze(0).detach().numpy(), None, None
+        
+        dist = Normal(mean, std)
+        raw_action = dist.rsample()
+        action = torch.tanh(raw_action)
+
+        log_prob = dist.log_prob(raw_action).sum(-1)
+        entropy = dist.entropy().sum(-1)
+        
+        return action.squeeze(0).detach().numpy(), log_prob, entropy
+
+    def update(self, trajectory):
+        states, returns, log_probs, entropies = trajectory
+        
+        states_t = torch.from_numpy(np.array(states)).float()
+        returns = torch.tensor(returns, dtype=torch.float32)
+
+        returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+
+        log_probs = torch.cat(log_probs)
+        entropies = torch.cat(entropies)
+        
+        if returns.numel() > 1:
+            returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+        
+        # === VALUE (baseline) ===
+        values = self.value(states_t).squeeze(-1)
+
+        advantages = returns - values
+        advantages_detached = advantages.detach()
+        advantages = (advantages_detached - advantages_detached.mean()) / (advantages_detached.std() + 1e-8)
+
+        # === LOSS ===
+        policy_loss = -(log_probs * advantages).mean()
+        entropy_loss = -self.entropy_coeff * entropies.mean()
+
+        value_loss = 0.5 * (values - returns).pow(2).mean()
+
+        total_policy_loss = policy_loss + entropy_loss
+        
+        self.policy_optimizer.zero_grad()
+        total_policy_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 1.0)
+        self.policy_optimizer.step()
+
+        self.value_optimizer.zero_grad()
+        value_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.value.parameters(), 1.0)
+        self.value_optimizer.step()
+
+    def save(self, path="best_reinforce.pth"):
+        torch.save({
+            'policy': self.policy.state_dict(),
+            'value': self.value.state_dict()
+        }, path)
+
+    def load(self, path="best_reinforce.pth"):
+        ckpt = torch.load(path)
+        self.policy.load_state_dict(ckpt['policy'])
+        self.value.load_state_dict(ckpt['value'])
+        self.policy.eval()
+        self.value.eval()
+
+
+class ValueNetwork(nn.Module):
+    def __init__(self, input_dim, hidden_dim=64):
+        super().__init__()
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.out = nn.Linear(hidden_dim, 1)
+
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        return self.out(x)
+
+
+class TRPOAgent:
+    def __init__(self, env, lr=1e-3, gamma=0.99, delta=0.01, cg_damping=0.1):
+        self.env = env
+        self.gamma = gamma
+        self.delta = delta
+        self.cg_damping = cg_damping
+        self.policy = PolicyNetwork(env.observation_space.shape[0])
+        self.value = ValueNetwork(env.observation_space.shape[0])
+        self.policy_optimizer = optim.Adam(self.policy.parameters(), lr=lr)
+        self.value_optimizer = optim.Adam(self.value.parameters(), lr=lr)
+
+    def select_action(self, state):
+        state = torch.from_numpy(state).float().unsqueeze(0)
+        mean, log_std = self.policy(state)
+        std = torch.exp(log_std)
+        cov = torch.diag_embed(std.squeeze(0)**2)
+        dist = MultivariateNormal(mean.squeeze(0), cov)
+        action = dist.sample()
+        log_prob = dist.log_prob(action)
+        return action.numpy(), log_prob
+
+    def compute_advantages(self, states, rewards, next_states):
+        # ИСПРАВЛЕНИЕ: Используем np.stack вместо np.array для списков numpy-массивов
+        states = torch.from_numpy(np.stack(states)).float()
+        next_states = torch.from_numpy(np.stack(next_states)).float()
+        values = self.value(states).squeeze(-1).detach()
+        next_values = self.value(next_states).squeeze(-1).detach()
+        deltas = torch.tensor(rewards).float() + self.gamma * next_values - values
+        advantages = []
+        adv = 0.0
+        for delta in reversed(deltas):
+            adv = delta + self.gamma * adv
+            advantages.insert(0, adv)
+        return torch.tensor(advantages).float()
+
+    def surrogate_loss(self, log_probs_old, advantages, states, actions):
+        mean, log_std = self.policy(states)
+        std = torch.exp(log_std)
+        cov = torch.diag_embed(std**2)
+        dist = MultivariateNormal(mean, cov)
+        log_probs_new = dist.log_prob(actions)
+        ratio = torch.exp(log_probs_new - log_probs_old)
+        return (ratio * advantages).mean()
+
+    def hessian_vector_product(self, v, states):
+        kl = self.kl_divergence(states)
+        grads = torch.autograd.grad(kl, self.policy.parameters(), create_graph=True)
+        flat_grad = torch.cat([grad.contiguous().view(-1) for grad in grads])
+        kl_v = torch.sum(flat_grad * v)
+        grads2 = torch.autograd.grad(kl_v, self.policy.parameters())
+        flat_hvp = torch.cat([grad.contiguous().view(-1) for grad in grads2])
+        return flat_hvp
+
+    def kl_divergence(self, states):
+        states = torch.from_numpy(np.array(states)).float() if not isinstance(states, torch.Tensor) else states
+        with torch.no_grad():
+            mean_old, log_std_old = self.old_policy(states)
+        std_old = torch.exp(log_std_old)
+        cov_old = torch.diag_embed(std_old**2)
+        dist_old = MultivariateNormal(mean_old, cov_old)
+        mean, log_std = self.policy(states)
+        std = torch.exp(log_std)
+        cov = torch.diag_embed(std**2)
+        dist = MultivariateNormal(mean, cov)
+        kl = torch.distributions.kl.kl_divergence(dist_old, dist).mean()
+        return kl
+
+    def conjugate_gradient(self, A, b, nsteps=10):
+        x = torch.zeros_like(b)
+        r = b.clone()
+        p = b.clone()
+        for _ in range(nsteps):
+            Ap = A(p)
+            alpha = (r @ r) / (p @ Ap)
+            x += alpha * p
+            r -= alpha * Ap
+            beta = (r @ r) / (r @ r + 1e-8)
+            p = r + beta * p
+        return x
+
+    def update(self, trajectory):
+        states, actions, rewards, log_probs, next_states = trajectory
+        self.old_policy = copy.deepcopy(self.policy)
+        advantages = self.compute_advantages(states, rewards, next_states)
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        
+        # ИСПРАВЛЕНИЕ: np.stack
+        states_t = torch.from_numpy(np.stack(states)).float()
+        actions_t = torch.from_numpy(np.stack(actions)).float()
+        log_probs_old = torch.cat([lp.view(1) for lp in log_probs])
+        surr = self.surrogate_loss(log_probs_old, advantages, states_t, actions_t)
+        grad = torch.autograd.grad(surr, self.policy.parameters())
+        grad = torch.cat([g.view(-1) for g in grad]).detach()
+        def Hvp(v):
+            return self.hessian_vector_product(v, states_t) + self.cg_damping * v
+        step_dir = self.conjugate_gradient(Hvp, grad)
+        shs = 0.5 * (step_dir @ Hvp(step_dir))
+        lm = torch.sqrt(shs / self.delta)
+        full_step = step_dir / lm
+        old_params = torch.cat([p.view(-1) for p in self.policy.parameters()]).detach()
+        def linesearch(alpha):
+            new_params = old_params + alpha * full_step
+            idx = 0
+            for p in self.policy.parameters():
+                p_numel = p.numel()
+                p.data.copy_(new_params[idx:idx+p_numel].view(p.shape))
+                idx += p_numel
+            new_surr = self.surrogate_loss(log_probs_old, advantages, states_t, actions_t)
+            kl = self.kl_divergence(states_t)
+            if new_surr >= surr and kl <= self.delta:
+                return True
+            return False
+        alpha = 1.0
+        for _ in range(10):
+            if linesearch(alpha):
+                break
+            alpha *= 0.5
+        values_target = advantages + self.value(states_t).squeeze(-1).detach()
+        for _ in range(10):
+            self.value_optimizer.zero_grad()
+            values = self.value(states_t).squeeze(-1)
+            value_loss = (values - values_target).pow(2).mean()
+            value_loss.backward()
+            self.value_optimizer.step()
+
+    def select_action(self, state, deterministic=False):
+        state = torch.from_numpy(state).float().unsqueeze(0)
+        mean, log_std = self.policy(state)
+        
+        if deterministic:
+            return mean.squeeze(0).detach().numpy(), None
+            
+        std = torch.exp(log_std)
+        cov = torch.diag_embed(std.squeeze(0)**2)
+        dist = MultivariateNormal(mean.squeeze(0), cov)
+        action = dist.sample()
+        log_prob = dist.log_prob(action)
+        return action.numpy(), log_prob
+
+    def save(self, path):
+        torch.save({
+            'policy': self.policy.state_dict(),
+            'value': self.value.state_dict()
+        }, path)
+
+    def load(self, path):
+        checkpoint = torch.load(path)
+        self.policy.load_state_dict(checkpoint['policy'])
+        self.value.load_state_dict(checkpoint['value'])
+        self.policy.eval()
+        self.value.eval()
