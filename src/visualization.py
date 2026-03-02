@@ -4,7 +4,6 @@ import math
 import os
 
 class Renderer:
-    def __init__(self, env):
     def __init__(self, env, screen_size=None):
         pygame.init()
         self.screen = pygame.display.set_mode((env.space_size))
