@@ -65,7 +65,6 @@ def train_reinforce(env, episodes=5000, batch_size=12, lr=3e-4, entropy_coeff=0.
         total_ep += current_batch_size
         batch_idx += 1
 
-        batch_rewards = []
         states_all = []
         actions_all = []
         returns_all = []
@@ -78,7 +77,6 @@ def train_reinforce(env, episodes=5000, batch_size=12, lr=3e-4, entropy_coeff=0.
             states_all.extend(states)
             actions_all.extend(actions)
             returns_all.extend(ep_returns)
-            batch_rewards.append(sum(traj_rewards))
 
         big_trajectory = (states_all, actions_all, returns_all)
 

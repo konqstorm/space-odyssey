@@ -13,14 +13,11 @@ class Ship:
     def apply_thrust(self, forward_thrust, rot_thrust, dt):
         direction = np.array([np.cos(self.angle), np.sin(self.angle)])
         self.velocity += forward_thrust * direction * dt
-        self.angular_velocity += rot_thrust * dt * 0.35
-        self.angular_velocity = np.clip(self.angular_velocity, -1.2, 1.2)
+        self.angular_velocity += rot_thrust * dt
 
     def update(self, dt):
         self.angle += self.angular_velocity * dt
         self.position += self.velocity * dt
-        self.velocity *= 0.995
-        self.angular_velocity *= 0.88
 
 class Asteroid:
     def __init__(self, position, radius, angle=0.0):
@@ -32,8 +29,6 @@ class SpaceEnv(gym.Env):
     def __init__(self, space_size=(1920, 1080), num_asteroids=5, max_steps=1000):
         super().__init__()
         self.space_size = space_size
-        self.max_distance = np.hypot(self.space_size[0], self.space_size[1])
-        self.thrust_scale = 0.45
         self.num_asteroids = num_asteroids
         self.max_steps = max_steps
         
@@ -43,9 +38,6 @@ class SpaceEnv(gym.Env):
         obs_dim = 2 + 2 + 1 + 1 + 2 + self.num_asteroids * 3
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
         self.reset()
-
-    def _get_distance(self, pos1, pos2):
-        return float(np.linalg.norm((pos1 - pos2).astype(np.float64)))
 
     def reset(self, seed=None, options=None):
         # Корабль и цель лучше не спавнить у самых краев
@@ -59,22 +51,10 @@ class SpaceEnv(gym.Env):
             pos = [np.random.uniform(0, self.space_size[0]), np.random.uniform(0, self.space_size[1])]
             radius = np.random.uniform(20.0, 150.0) # Астероиды разных размеров
             angle = np.random.uniform(0, 2 * np.pi)
-
-            pos_arr = np.array(pos)
-            # check against goal and ship
-            if self._get_distance(pos_arr, self.goal) <= (radius + safe_margin):
-                continue
-            if self._get_distance(pos_arr, self.ship.position) <= (radius + self.ship.radius + safe_margin):
-                continue
-            # check against existing asteroids
-            collision = False
-            for a in self.asteroids:
-                if self._get_distance(pos_arr, a.position) <= (radius + a.radius + safe_margin):
-                    collision = True
-                    break
-            if collision:
-                continue
-            self.asteroids.append(Asteroid(pos, radius, angle))
+            
+            # Проверка: астероид не должен перекрывать финиш
+            if np.linalg.norm(np.array(pos) - self.goal) > (radius + safe_margin):
+                self.asteroids.append(Asteroid(pos, radius, angle))
                 
         self.current_step = 0
         self.prev_distance = np.linalg.norm(self.ship.position - self.goal)
@@ -88,7 +68,7 @@ class SpaceEnv(gym.Env):
         forward_thrust = action[0]
         rot_thrust = action[1]
 
-        forward_thrust = forward_thrust * self.thrust_scale
+        forward_thrust = np.clip(forward_thrust, 0.0, 1.0)
         rot_thrust = np.clip(rot_thrust, -1.0, 1.0)
         self.last_action = np.array([forward_thrust, rot_thrust])
         
@@ -132,7 +112,7 @@ class SpaceEnv(gym.Env):
             termination_reason = "goal"
             
         for asteroid in self.asteroids:
-            if self._get_distance(self.ship.position, asteroid.position) < self.ship.radius + asteroid.radius:
+            if np.linalg.norm(self.ship.position - asteroid.position) < self.ship.radius + asteroid.radius:
                 reward -= 50.0
                 done = True
                 termination_reason = "asteroid"
@@ -149,14 +129,10 @@ class SpaceEnv(gym.Env):
         }
         return self._get_obs(), reward, done, truncated, info
 
-    # for now i removed asteroid data from here, but it shoud be re-added when asteroids will be opt-in
     def _get_obs(self):
-        # --- ВЕКТОР ДО ЦЕЛИ С УЧЁТОМ TORUS ---
+        # --- ВЕКТОР ДО ЦЕЛИ ---
         dx = self.goal[0] - self.ship.position[0]
         dy = self.goal[1] - self.ship.position[1]
-
-        dx = (dx + self.space_size[0] / 2) % self.space_size[0] - self.space_size[0] / 2
-        dy = (dy + self.space_size[1] / 2) % self.space_size[1] - self.space_size[1] / 2
 
         # --- ПОВОРОТ В BODY FRAME ---
         angle = self.ship.angle
@@ -179,14 +155,7 @@ class SpaceEnv(gym.Env):
         cos_err = np.cos(angle_error)
 
         # --- РАССТОЯНИЕ ---
-        dist = self._get_distance(self.ship.position, self.goal)
-
-        dx_body_norm = np.clip(dx_body / (self.space_size[0] + 1e-8), -1.0, 1.0)
-        dy_body_norm = np.clip(dy_body / (self.space_size[1] + 1e-8), -1.0, 1.0)
-        vx_body_norm = np.clip(vx_body / 20.0, -1.0, 1.0)
-        vy_body_norm = np.clip(vy_body / 20.0, -1.0, 1.0)
-        angular_velocity_norm = np.clip(self.ship.angular_velocity / 1.2, -1.0, 1.0)
-        dist_norm = np.clip(dist / (self.max_distance + 1e-8), 0.0, 1.0)
+        dist = np.sqrt(dx*dx + dy*dy)
 
         max_dist = np.sqrt(self.space_size[0] ** 2 + self.space_size[1] ** 2)
         vx_scale = 20.0
