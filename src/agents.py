@@ -15,6 +15,14 @@ class PolicyNetwork(nn.Module):
         self.head_thrust = nn.Linear(hidden_dim, 2)
         self.fc_torque = nn.Linear(hidden_dim, hidden_dim)
         self.head_torque = nn.Linear(hidden_dim, 2)
+        self._init_policy_biases()
+
+    def _init_policy_biases(self):
+        # Более нейтральный старт: не "душим" тягу и оставляем умеренный шум.
+        nn.init.constant_(self.head_thrust.bias[0], 0.0)
+        nn.init.constant_(self.head_torque.bias[0], 0.0)
+        nn.init.constant_(self.head_thrust.bias[1], -0.5)
+        nn.init.constant_(self.head_torque.bias[1], -0.5)
         
     
     def forward(self, x):
@@ -27,25 +35,26 @@ class PolicyNetwork(nn.Module):
         out_thrust = self.head_thrust(x_thrust)
         out_torque = self.head_torque(x_torque)
         
+        # Mean в "raw"-пространстве; ограничение [-1, 1] делаем через tanh уже при сэмплинге action.
         mean = torch.cat([
-            torch.tanh(out_thrust[:, 0:1]),
-            torch.tanh(out_torque[:, 0:1])
+            out_thrust[:, 0:1],
+            out_torque[:, 0:1]
         ], dim=-1)
         log_std = torch.cat([
             out_thrust[:, 1:2],
             out_torque[:, 1:2]
         ], dim=-1)
-        log_std = torch.clamp(log_std, -5, 2)
+        log_std = torch.clamp(log_std, -4, 1)
         return mean, log_std
 
 
 class REINFORCEAgent:
-    def __init__(self, env, lr=3e-4, gamma=0.99, entropy_coeff=0.01, vf_coeff=0.5, device=None):
+    def __init__(self, env, lr=3e-4, gamma=0.99, entropy_coeff=0.002, vf_coeff=0.5, update_epochs=4):
         self.env = env
         self.gamma = gamma
         self.entropy_coeff = entropy_coeff
         self.vf_coeff = vf_coeff
-        self.device = torch.device(device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu"))
+        self.update_epochs = update_epochs
         
         self.policy = PolicyNetwork(env.observation_space.shape[0])
         self.value = ValueNetwork(env.observation_space.shape[0])
@@ -55,13 +64,14 @@ class REINFORCEAgent:
         self.policy_optimizer = optim.Adam(self.policy.parameters(), lr=lr)
         self.value_optimizer = optim.Adam(self.value.parameters(), lr=lr)
 
-    def select_actions(self, states, deterministic=False):
-        states_t = torch.from_numpy(np.array(states)).float().to(self.device)
-        mean, log_std = self.policy(states_t)
-        std = torch.exp(log_std).clamp(1e-6, 10.0)
+    def select_action(self, state, deterministic=False):
+        state_t = torch.from_numpy(state).float().unsqueeze(0)
+        mean, log_std = self.policy(state_t)
+        std = torch.exp(log_std).clamp(1e-3, 1.0)
         
         if deterministic:
-            return mean.detach().cpu().numpy(), None, None
+            action = torch.tanh(mean)
+            return action.squeeze(0).detach().numpy(), None, None
         
         dist = Normal(mean, std)
         raw_action = dist.rsample()
@@ -80,41 +90,66 @@ class REINFORCEAgent:
             return action, None, None
         return action, log_prob[:1], entropy[:1]
 
+    def sample_action(self, state):
+        state_t = torch.from_numpy(state).float().unsqueeze(0)
+        with torch.no_grad():
+            mean, log_std = self.policy(state_t)
+            std = torch.exp(log_std).clamp(1e-3, 1.0)
+            dist = Normal(mean, std)
+            raw_action = dist.sample()
+            action = torch.tanh(raw_action)
+        return action.squeeze(0).numpy()
+
+    def sample_actions(self, states):
+        states_t = torch.from_numpy(states).float()
+        with torch.no_grad():
+            mean, log_std = self.policy(states_t)
+            std = torch.exp(log_std).clamp(1e-3, 1.0)
+            dist = Normal(mean, std)
+            raw_actions = dist.sample()
+            actions = torch.tanh(raw_actions)
+        return actions.numpy()
+
     def update(self, trajectory):
-        states, returns, log_probs, entropies = trajectory
+        states, actions, returns = trajectory
         
-        states_t = torch.from_numpy(np.array(states)).float().to(self.device)
-        returns = torch.tensor(returns, dtype=torch.float32, device=self.device)
+        states_t = torch.from_numpy(np.stack(states)).float()
+        actions_t = torch.from_numpy(np.stack(actions)).float()
+        returns_t = torch.tensor(returns, dtype=torch.float32)
 
-        returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+        raw_actions = torch.atanh(actions_t.clamp(-0.999999, 0.999999))
 
-        log_probs = torch.cat(log_probs)
-        entropies = torch.cat(entropies)
-        
-        # === VALUE (baseline) ===
-        values = self.value(states_t).squeeze(-1)
+        for _ in range(self.update_epochs):
+            mean, log_std = self.policy(states_t)
+            std = torch.exp(log_std).clamp(1e-3, 1.0)
+            dist = Normal(mean, std)
 
-        advantages = returns - values
-        advantages_detached = advantages.detach()
-        advantages = (advantages_detached - advantages_detached.mean()) / (advantages_detached.std() + 1e-8)
+            log_probs_raw = dist.log_prob(raw_actions).sum(-1)
+            squash_correction = torch.log(1 - actions_t.pow(2) + 1e-6).sum(-1)
+            log_probs = log_probs_raw - squash_correction
+            entropies = dist.entropy().sum(-1)
 
-        # === LOSS ===
-        policy_loss = -(log_probs * advantages).mean()
-        entropy_loss = -self.entropy_coeff * entropies.mean()
+            values = self.value(states_t).squeeze(-1)
 
-        value_loss = 0.5 * (values - returns).pow(2).mean()
+            advantages = returns_t - values.detach()
+            if advantages.numel() > 1:
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-        total_policy_loss = policy_loss + entropy_loss
-        
-        self.policy_optimizer.zero_grad()
-        total_policy_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 1.0)
-        self.policy_optimizer.step()
+            policy_loss = -(log_probs * advantages).mean()
+            entropy_loss = -self.entropy_coeff * entropies.mean()
+            value_loss = 0.5 * (values - returns_t).pow(2).mean()
 
-        self.value_optimizer.zero_grad()
-        value_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.value.parameters(), 1.0)
-        self.value_optimizer.step()
+            total_policy_loss = policy_loss + entropy_loss
+
+            self.policy_optimizer.zero_grad()
+            total_policy_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 1.0)
+            self.policy_optimizer.step()
+
+            self.value_optimizer.zero_grad()
+            value_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.value.parameters(), 1.0)
+            self.value_optimizer.step()
 
     def save(self, path="best_reinforce.pth"):
         torch.save({

@@ -83,7 +83,9 @@ class SpaceEnv(gym.Env):
         return self._get_obs(), {}
 
     def step(self, action):
-        forward_thrust = (action[0] + 1) / 2
+        # Первый канал действия интерпретируем как "газ" в диапазоне [-1, 1],
+        # где <= 0 означает отсутствие тяги вперед.
+        forward_thrust = action[0]
         rot_thrust = action[1]
 
         forward_thrust = forward_thrust * self.thrust_scale
@@ -94,64 +96,58 @@ class SpaceEnv(gym.Env):
         self.ship.apply_thrust(forward_thrust, rot_thrust, dt)
         self.ship.update(dt)
 
-        self.ship.angle %= (2 * np.pi)
+        current_distance = np.linalg.norm(self.ship.position - self.goal)
+        ddist = self.prev_distance - current_distance
+        ship_velocity = np.linalg.norm(self.ship.velocity)
 
-        out_of_bounds = (
-            self.ship.position[0] < 0.0 or self.ship.position[0] > self.space_size[0] or
-            self.ship.position[1] < 0.0 or self.ship.position[1] > self.space_size[1]
-        )
-        if out_of_bounds:
-            current_distance = self._get_distance(self.ship.position, self.goal)
-            distance_delta = current_distance - self.prev_distance
-            self.current_step += 1
-            return self._get_obs(), -120.0, True, False, {
-                "termination_reason": "out_of_bounds",
-                "distance": current_distance,
-                "distance_delta": distance_delta
-            }
-        
-        current_distance = self._get_distance(self.ship.position, self.goal)
+        # Буст за прогресс вблизи цели:
+        # далеко коэффициент ~1, рядом с целью плавно растет, но ограниченно.
+        max_dist = np.sqrt(self.space_size[0] ** 2 + self.space_size[1] ** 2)
+        dist_norm = current_distance / (max_dist + 1e-6)
+        alpha = 1.2   # максимум: коэффициент = 1 + alpha (т.е. 2.2x)
+        d0 = 0.12     # ширина "зоны усиления" в долях max_dist
+        near_goal_boost = 1.0 + alpha / (1.0 + (dist_norm / d0) ** 2)
 
+        reward = (ddist / (0.01 + ship_velocity)) * 0.1 * near_goal_boost
+        self.prev_distance = current_distance
+
+        # Добавляем форму награды за стабилизацию курса на цель
         dx = self.goal[0] - self.ship.position[0]
         dy = self.goal[1] - self.ship.position[1]
-
         target_angle = np.arctan2(dy, dx)
         angle_error = target_angle - self.ship.angle
         angle_error = (angle_error + np.pi) % (2 * np.pi) - np.pi
-
-        distance_norm = np.clip(current_distance / (self.max_distance + 1e-8), 0.0, 1.0)
-        proximity = (1.0 - distance_norm) ** 2
-        proximity_quadratic = proximity ** 2
-
-        distance_delta = current_distance - self.prev_distance
-        distance_progress = -distance_delta / (self.max_distance + 1e-8)
-        distance_reward = distance_progress * (0.1 + 2.6 * proximity_quadratic)
-
-        angle_alignment = np.cos(angle_error)
-        angle_reward = 0.45 * angle_alignment * (0.35 + 0.65 * proximity)
-
-        reward = distance_reward + angle_reward
-
-        self.prev_distance = current_distance
+        reward += 0.1 * np.cos(angle_error)
+        reward -= 0.1 * abs(np.sin(angle_error))
+        reward -= 0.1 * abs(self.ship.angular_velocity)
+        reward -= 0.005 * np.linalg.norm(self.ship.velocity)
         
         done = False
         truncated = False
+        termination_reason = "running"
         
         if current_distance < self.ship.radius + 5.0:
-            reward += 100.0
+            reward += 200.0
             done = True
+            termination_reason = "goal"
             
         for asteroid in self.asteroids:
             if self._get_distance(self.ship.position, asteroid.position) < self.ship.radius + asteroid.radius:
                 reward -= 50.0
                 done = True
+                termination_reason = "asteroid"
                 break
                 
         self.current_step += 1
-        if self.current_step >= self.max_steps:
+        if self.current_step >= self.max_steps and not done:
             truncated = True
-            
-        return self._get_obs(), reward, done, truncated, {}
+            termination_reason = "timeout"
+
+        info = {
+            "termination_reason": termination_reason,
+            "distance_to_goal": float(current_distance),
+        }
+        return self._get_obs(), reward, done, truncated, info
 
     # for now i removed asteroid data from here, but it shoud be re-added when asteroids will be opt-in
     def _get_obs(self):
@@ -192,16 +188,43 @@ class SpaceEnv(gym.Env):
         angular_velocity_norm = np.clip(self.ship.angular_velocity / 1.2, -1.0, 1.0)
         dist_norm = np.clip(dist / (self.max_distance + 1e-8), 0.0, 1.0)
 
-        # len 8 array total
-        obs = np.array([
-            dx_body_norm,
-            dy_body_norm,
-            vx_body_norm,
-            vy_body_norm,
+        max_dist = np.sqrt(self.space_size[0] ** 2 + self.space_size[1] ** 2)
+        vx_scale = 20.0
+        vy_scale = 20.0
+        ang_vel_scale = 2.0
+
+        base_obs = np.array([
+            dx_body / self.space_size[0],
+            dy_body / self.space_size[1],
+            vx_body / vx_scale,
+            vy_body / vy_scale,
             sin_err,
             cos_err,
-            angular_velocity_norm,
-            dist_norm
+            self.ship.angular_velocity / ang_vel_scale,
+            dist / max_dist
         ], dtype=np.float32)
 
-        return obs
+        if self.num_asteroids == 0:
+            return base_obs
+
+        asteroid_features = []
+        max_radius = float(max(self.space_size))
+        asteroids_sorted = sorted(
+            self.asteroids,
+            key=lambda asteroid: np.linalg.norm(asteroid.position - self.ship.position)
+        )
+        for asteroid in asteroids_sorted[:self.num_asteroids]:
+            rel = asteroid.position - self.ship.position
+            ax_body = cos_a * rel[0] - sin_a * rel[1]
+            ay_body = sin_a * rel[0] + cos_a * rel[1]
+            asteroid_features.extend([
+                ax_body / self.space_size[0],
+                ay_body / self.space_size[1],
+                asteroid.radius / max_radius
+            ])
+
+        expected_len = self.num_asteroids * 3
+        if len(asteroid_features) < expected_len:
+            asteroid_features.extend([0.0] * (expected_len - len(asteroid_features)))
+
+        return np.concatenate([base_obs, np.array(asteroid_features, dtype=np.float32)], axis=0)
