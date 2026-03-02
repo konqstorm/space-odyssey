@@ -1,8 +1,9 @@
 import numpy as np
 from agents import REINFORCEAgent, TRPOAgent
 import os
+from environment import SpaceEnv
 
-def train_reinforce(env, episodes=5000, batch_size=12, save_path="reinforce"):
+def train_reinforce(env, episodes=5000, batch_size=12, save_path="reinforce", lr=3e-4):
     os.makedirs(save_path, exist_ok=True)
 
     def compute_returns(rewards, gamma):
@@ -13,62 +14,75 @@ def train_reinforce(env, episodes=5000, batch_size=12, save_path="reinforce"):
             returns.insert(0, R)
         return returns
 
-    agent = REINFORCEAgent(env, lr=3e-4, entropy_coeff=0.015, vf_coeff=0.5)
+    agent = REINFORCEAgent(env, lr=lr, entropy_coeff=0.015, vf_coeff=0.5)
+    print(f"Device: {agent.device}")
     best_reward = -np.inf
     total_ep = 0
 
     while total_ep < episodes:
-        batch_trajectories = []
-        batch_rewards = []
+        env_batch_size = min(batch_size, episodes - total_ep)
+        envs = [
+            SpaceEnv(
+                space_size=env.space_size,
+                num_asteroids=env.num_asteroids,
+                max_steps=env.max_steps
+            )
+            for _ in range(env_batch_size)
+        ]
 
-        for _ in range(batch_size):
-            state, _ = env.reset()
-            done = truncated = False
-            trajectory = ([], [], [], [], [])   # states, actions, rewards, log_probs, entropies
+        trajectories = [([], [], [], [], []) for _ in range(env_batch_size)]
+        states = []
+        done_flags = [False] * env_batch_size
 
-            while not (done or truncated):
-                action, log_prob, entropy = agent.select_action(state)
-                next_state, reward, done, truncated, _ = env.step(action)
+        for worker_env in envs:
+            state, _ = worker_env.reset()
+            states.append(state)
 
-                trajectory[0].append(state)
+        while not all(done_flags):
+            active_ids = [i for i, done in enumerate(done_flags) if not done]
+            active_states = [states[i] for i in active_ids]
+            actions, log_probs, entropies = agent.select_actions(active_states)
+
+            for local_idx, env_idx in enumerate(active_ids):
+                action = actions[local_idx]
+                next_state, reward, done, truncated, _ = envs[env_idx].step(action)
+                trajectory = trajectories[env_idx]
+
+                trajectory[0].append(states[env_idx])
                 trajectory[1].append(action)
                 trajectory[2].append(reward)
-                trajectory[3].append(log_prob)
-                trajectory[4].append(entropy)
+                trajectory[3].append(log_probs[local_idx:local_idx + 1])
+                trajectory[4].append(entropies[local_idx:local_idx + 1])
 
-                state = next_state
+                states[env_idx] = next_state
+                if done or truncated:
+                    done_flags[env_idx] = True
 
-            batch_trajectories.append(trajectory)
-            batch_rewards.append(sum(trajectory[2]))
-            total_ep += 1
-
+        batch_rewards = []
         states_all = []
-        actions_all = []
-        rewards_all = []
         log_probs_all = []
         entropies_all = []
         returns_all = []
 
-        for traj in batch_trajectories:
-            states, actions, rewards, log_probs, entropies = traj
-            
-            ep_returns = compute_returns(rewards, agent.gamma)
+        for trajectory in trajectories:
+            traj_states, _, traj_rewards, traj_log_probs, traj_entropies = trajectory
+            ep_returns = compute_returns(traj_rewards, agent.gamma)
 
-            states_all.extend(states)
-            actions_all.extend(actions)
-            rewards_all.extend(rewards)
-            log_probs_all.extend(log_probs)
-            entropies_all.extend(entropies)
+            states_all.extend(traj_states)
+            log_probs_all.extend(traj_log_probs)
+            entropies_all.extend(traj_entropies)
             returns_all.extend(ep_returns)
+            batch_rewards.append(sum(traj_rewards))
 
+        total_ep += env_batch_size
         big_trajectory = (states_all, returns_all, log_probs_all, entropies_all)
-
         agent.update(big_trajectory)
 
         avg_reward = np.mean(batch_rewards)
         max_in_batch = max(batch_rewards)
+        batch_idx = (total_ep + batch_size - 1) // batch_size
 
-        print(f"Batch {total_ep//batch_size:3d} | "
+        print(f"Batch {batch_idx:3d} | "
               f"Avg Reward: {avg_reward:8.2f} | "
               f"Best in batch: {max_in_batch:8.2f} | "
               f"Global best: {best_reward:8.2f}")

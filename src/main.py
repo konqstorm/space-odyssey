@@ -132,7 +132,7 @@ def main():
         print(f"Learning Rate: {args.lr}")
         print(f"Сохранение модели в: {save_path}")
         print()
-        train_reinforce(env, episodes=args.episodes, save_path=save_path)
+        train_reinforce(env, episodes=args.episodes, save_path=save_path, lr=args.lr)
         
     elif args.train_trpo:
         save_path = args.save_model or "models/trpo"
