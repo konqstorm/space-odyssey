@@ -34,31 +34,52 @@ class SpaceEnv(gym.Env):
         
         self.action_space = spaces.Box(low=np.array([0.0, -1.0]), high=np.array([1.0, 1.0]), dtype=np.float32)
         
-        # Обновлено: теперь мы передаем X, Y и Radius для каждого астероида (num_asteroids * 3)
-        obs_dim = 2 + 2 + 1 + 1 + 2 + self.num_asteroids * 3
+        # without asteroids, see _get_obs
+        obs_dim = 8
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
         self.reset()
 
+    # Вспомогательная функция для расчета дистанции в зацикленном пространстве (Торе)
+    def _get_torus_distance(self, pos1, pos2):
+        dx = abs(pos1[0] - pos2[0])
+        dy = abs(pos1[1] - pos2[1])
+        # Находим кратчайший путь: напрямую или через границу экрана
+        dx = min(dx, self.space_size[0] - dx)
+        dy = min(dy, self.space_size[1] - dy)
+        return np.hypot(dx, dy)
+
     def reset(self, seed=None, options=None):
-        # Корабль и цель лучше не спавнить у самых краев
+        # place ship and goal with a small border from edges
         self.ship = Ship([np.random.uniform(50, self.space_size[0]-50), np.random.uniform(50, self.space_size[1]-50)])
         self.goal = np.array([np.random.uniform(50, self.space_size[0]-50), np.random.uniform(50, self.space_size[1]-50)], dtype=np.float32)
         
+        # create asteroids ensuring they don't overlap goal or ship (or each other)
         self.asteroids = []
-        safe_margin = 40.0 # Дополнительный зазор вокруг цели
-        
+        safe_margin = 40.0 
         while len(self.asteroids) < self.num_asteroids:
             pos = [np.random.uniform(0, self.space_size[0]), np.random.uniform(0, self.space_size[1])]
-            radius = np.random.uniform(20.0, 150.0) # Астероиды разных размеров
+            radius = np.random.uniform(20.0, 150.0)
             angle = np.random.uniform(0, 2 * np.pi)
-            
-            # Проверка: астероид не должен перекрывать финиш
-            if np.linalg.norm(np.array(pos) - self.goal) > (radius + safe_margin):
-                self.asteroids.append(Asteroid(pos, radius, angle))
+
+            pos_arr = np.array(pos)
+            # check against goal and ship
+            if self._get_torus_distance(pos_arr, self.goal) <= (radius + safe_margin):
+                continue
+            if self._get_torus_distance(pos_arr, self.ship.position) <= (radius + self.ship.radius + safe_margin):
+                continue
+            # check against existing asteroids
+            collision = False
+            for a in self.asteroids:
+                if self._get_torus_distance(pos_arr, a.position) <= (radius + a.radius + safe_margin):
+                    collision = True
+                    break
+            if collision:
+                continue
+            self.asteroids.append(Asteroid(pos, radius, angle))
                 
         self.current_step = 0
-        self.prev_distance = np.linalg.norm(self.ship.position - self.goal)
-        self.last_action = np.array([0.0, 0.0]) # Сохраняем для визуализации
+        self.prev_distance = self._get_torus_distance(self.ship.position, self.goal)
+        self.last_action = np.array([0.0, 0.0])
         
         return self._get_obs(), {}
 
@@ -74,10 +95,22 @@ class SpaceEnv(gym.Env):
         self.ship.apply_thrust(forward_thrust, rot_thrust, dt)
         self.ship.update(dt)
         
-        current_distance = np.linalg.norm(self.ship.position - self.goal)
+        # 1. ЗАЦИКЛИВАНИЕ ПРОСТРАНСТВА (Pacman)
+        self.ship.position[0] %= self.space_size[0]
+        self.ship.position[1] %= self.space_size[1]
+        
+        # 2. НОРМАЛИЗАЦИЯ УГЛА (от 0 до 2*Pi)
+        self.ship.angle %= (2 * np.pi)
+        
+        # Используем torus_distance вместо linalg.norm
+        current_distance = self._get_torus_distance(self.ship.position, self.goal)
+        # old linear reward based on distance reduction, now replaced with a smoother potential function of distance
+        # reward = (self.prev_distance - current_distance) * 0.1
+        
         prev_phi = -np.sqrt(self.prev_distance + 1e-6)
         curr_phi = -np.sqrt(current_distance + 1e-6)
-        reward = 100 * (curr_phi - prev_phi)
+        reward = 0.5 * (curr_phi - prev_phi)
+
         self.prev_distance = current_distance
         
         done = False
@@ -88,7 +121,7 @@ class SpaceEnv(gym.Env):
             done = True
             
         for asteroid in self.asteroids:
-            if np.linalg.norm(self.ship.position - asteroid.position) < self.ship.radius + asteroid.radius:
+            if self._get_torus_distance(self.ship.position, asteroid.position) < self.ship.radius + asteroid.radius:
                 reward -= 50.0
                 done = True
                 break
@@ -99,10 +132,14 @@ class SpaceEnv(gym.Env):
             
         return self._get_obs(), reward, done, truncated, {}
 
+    # for now i removed asteroid data from here, but it shoud be re-added when asteroids will be opt-in
     def _get_obs(self):
-        # --- ВЕКТОР ДО ЦЕЛИ ---
+        # --- ВЕКТОР ДО ЦЕЛИ С УЧЁТОМ TORUS ---
         dx = self.goal[0] - self.ship.position[0]
         dy = self.goal[1] - self.ship.position[1]
+
+        dx = (dx + self.space_size[0] / 2) % self.space_size[0] - self.space_size[0] / 2
+        dy = (dy + self.space_size[1] / 2) % self.space_size[1] - self.space_size[1] / 2
 
         # --- ПОВОРОТ В BODY FRAME ---
         angle = self.ship.angle

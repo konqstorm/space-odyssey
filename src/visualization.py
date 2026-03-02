@@ -4,9 +4,9 @@ import math
 import os
 
 class Renderer:
-    def __init__(self, env, screen_size=800):
+    def __init__(self, env):
         pygame.init()
-        self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        self.screen = pygame.display.set_mode((env.space_size))
         self.env = env
         
         base = os.path.join(os.path.dirname(__file__), "../assets")
