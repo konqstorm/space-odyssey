@@ -9,8 +9,6 @@ from training import train_reinforce, train_trpo
 from manual_control import manual_control
 from simulation import watch_agent
 
-np.random.seed(42)
-torch.manual_seed(42)
 torch.set_num_threads(12)
 
 
@@ -84,10 +82,28 @@ def main():
         help="Количество эпизодов для обучения (по умолчанию 2000)"
     )
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=24,
+        help="Размер батча эпизодов для REINFORCE (по умолчанию 24)"
+    )
+    parser.add_argument(
         "--lr",
         type=float,
-        default=1e-3,
-        help="Learning rate (по умолчанию 1e-3)"
+        default=3e-4,
+        help="Learning rate (по умолчанию 3e-4)"
+    )
+    parser.add_argument(
+        "--entropy-coeff",
+        type=float,
+        default=0.002,
+        help="Коэффициент энтропии для REINFORCE (по умолчанию 0.002)"
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed для воспроизводимости. Если не задан, инициализация полностью случайная"
     )
     
     # Параметры Наблюдения
@@ -105,6 +121,10 @@ def main():
     )
     
     args = parser.parse_args()
+
+    if args.seed is not None:
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
     
     # Создание окружения
     env = SpaceEnv(
@@ -129,10 +149,20 @@ def main():
         print("РЕЖИМ: Обучение REINFORCE")
         print("=" * 60)
         print(f"Эпизодов: {args.episodes}")
+        print(f"Batch size: {args.batch_size}")
         print(f"Learning Rate: {args.lr}")
+        print(f"Entropy coeff: {args.entropy_coeff}")
+        print(f"Seed: {'random' if args.seed is None else args.seed}")
         print(f"Сохранение модели в: {save_path}")
         print()
-        train_reinforce(env, episodes=args.episodes, save_path=save_path)
+        train_reinforce(
+            env,
+            episodes=args.episodes,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            entropy_coeff=args.entropy_coeff,
+            save_path=save_path
+        )
         
     elif args.train_trpo:
         save_path = args.save_model or "models/trpo"
@@ -141,6 +171,7 @@ def main():
         print("=" * 60)
         print(f"Эпизодов: {args.episodes}")
         print(f"Learning Rate: {args.lr}")
+        print(f"Seed: {'random' if args.seed is None else args.seed}")
         print(f"Сохранение модели в: {save_path}")
         print()
         train_trpo(env, episodes=args.episodes, save_path=save_path)

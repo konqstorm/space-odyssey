@@ -20,7 +20,7 @@ def watch_agent(env, agent_class, model_path):
                     running = False
             
             # Используем deterministic=True, чтобы агент не "дрожал", а выбирал лучшие действия
-            action, _, _ = agent.select_action(state, deterministic=True)
+            action, _, _ = agent.select_action(state, deterministic=False)
             state, reward, done, truncated, _ = env.step(action)
             
             renderer.render()
