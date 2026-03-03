@@ -100,14 +100,14 @@ class SpaceEnv(gym.Env):
         reward += 0.1 * np.cos(angle_error)
         reward -= 0.1 * abs(np.sin(angle_error))
         reward -= 0.1 * abs(self.ship.angular_velocity)
-        reward -= 0.005 * np.linalg.norm(self.ship.velocity)
+        reward += 0.01 * np.linalg.norm(self.ship.velocity)
         
         done = False
         truncated = False
         termination_reason = "running"
         
         if current_distance < self.ship.radius + 5.0:
-            reward += 200.0
+            reward += 500.0
             done = True
             termination_reason = "goal"
             
@@ -120,6 +120,7 @@ class SpaceEnv(gym.Env):
                 
         self.current_step += 1
         if self.current_step >= self.max_steps and not done:
+            reward -= current_distance * 0.01
             truncated = True
             termination_reason = "timeout"
 
