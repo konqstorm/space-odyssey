@@ -46,7 +46,24 @@ class SpaceEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
+
+        self.throttle_gain = 3.0
+        self.throttle_center = 0.2
         self.reset()
+
+    def _map_forward_thrust(self, action_value):
+        a = float(np.clip(action_value, -1.0, 1.0))
+        k = float(self.throttle_gain)
+        c = float(self.throttle_center)
+
+        def _sigmoid(x):
+            return 1.0 / (1.0 + np.exp(-x))
+
+        lo = _sigmoid(k * (-1.0 - c))
+        hi = _sigmoid(k * (1.0 - c))
+        cur = _sigmoid(k * (a - c))
+        thrust = (cur - lo) / (hi - lo + 1e-8)
+        return float(np.clip(thrust, 0.0, 1.0))
 
     def _uniform_point_in_box(self, x_min, x_max, y_min, y_max):
         return np.array(
@@ -104,11 +121,10 @@ class SpaceEnv(gym.Env):
         return get_observation(self), {}
 
     def step(self, action):
-        # First action channel is forward thrust in [-1, 1], where <= 0 means no forward thrust.
-        forward_thrust = (action[0] + 1.0) / 2.0
+        # First action channel is mapped to [0, 1] with smooth sigmoid remap.
+        forward_thrust = self._map_forward_thrust(action[0])
         rot_thrust = action[1]
 
-        forward_thrust = np.clip(forward_thrust, 0.0, 1.0)
         rot_thrust = np.clip(rot_thrust, -1.0, 1.0)
         self.last_action = np.array([forward_thrust, rot_thrust])
 

@@ -4,6 +4,7 @@ from torch.distributions import MultivariateNormal
 import numpy as np
 import copy
 from .policy import PolicyNetwork
+from .value import ValueNetwork
 from .value_2 import ValueNetwork2
 
 

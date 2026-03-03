@@ -13,7 +13,7 @@ def reward_function(env):
     d0 = 0.12     # ширина "зоны усиления" в долях max_dist
     near_goal_boost = 1.0 + alpha / (1.0 + (dist_norm / d0) ** 2)
 
-    progress_reward = (ddist / (0.01 + ship_velocity)) * 0.3 * near_goal_boost
+    progress_reward = ddist * 0.3 * near_goal_boost
 
     # Добавляем форму награды за стабилизацию курса на цель
     dx = env.goal[0] - env.ship.position[0]
@@ -31,20 +31,20 @@ def reward_function(env):
     obstacle_proximity_penalty = 0.0
     obstacle_approach_penalty = 0.0
     if env.asteroids:
-        nearest_clearance = np.inf
+        nearest_surface_distance = np.inf
         nearest_vector = None
 
         for asteroid in env.asteroids:
             rel = asteroid.position - env.ship.position
             center_distance = np.linalg.norm(rel)
-            clearance = center_distance - (env.ship.radius + asteroid.radius)
-            if clearance < nearest_clearance:
-                nearest_clearance = clearance
+            surface_distance = center_distance - (env.ship.radius + asteroid.radius)
+            if surface_distance < nearest_surface_distance:
+                nearest_surface_distance = surface_distance
                 nearest_vector = rel
 
-        safe_clearance = 140.0
-        if nearest_clearance < safe_clearance:
-            danger = 1.0 - np.clip(nearest_clearance / safe_clearance, 0.0, 1.0)
+        safe_surface_distance = 140.0
+        if nearest_surface_distance < safe_surface_distance:
+            danger = 1.0 - np.clip(nearest_surface_distance / safe_surface_distance, 0.0, 1.0)
             obstacle_proximity_penalty = -0.8 * (danger ** 2)
 
             if nearest_vector is not None:
@@ -75,7 +75,7 @@ def reward_function(env):
         
     for asteroid in env.asteroids:
         if np.linalg.norm(env.ship.position - asteroid.position) < env.ship.radius + asteroid.radius:
-            collision_penalty = -500.0
+            collision_penalty = -200.0
             reward += collision_penalty
             break
     

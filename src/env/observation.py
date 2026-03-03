@@ -49,17 +49,23 @@ def get_observation(env):
 
     asteroid_features = []
     max_radius = float(max(env.space_size))
+    max_dist = np.sqrt(env.space_size[0] ** 2 + env.space_size[1] ** 2)
     asteroids_sorted = sorted(
         env.asteroids,
-        key=lambda asteroid: np.linalg.norm(asteroid.position - env.ship.position)
+        key=lambda asteroid: np.linalg.norm(asteroid.position - env.ship.position) - (env.ship.radius + asteroid.radius)
     )
     for asteroid in asteroids_sorted[:env.num_asteroids]:
         rel = asteroid.position - env.ship.position
+        center_distance = np.linalg.norm(rel)
+        surface_distance = center_distance - (env.ship.radius + asteroid.radius)
+
         ax_body = cos_a * rel[0] - sin_a * rel[1]
         ay_body = sin_a * rel[0] + cos_a * rel[1]
+        angle_to_asteroid_body = np.arctan2(ay_body, ax_body)
+
         asteroid_features.extend([
-            ax_body / env.space_size[0],
-            ay_body / env.space_size[1],
+            angle_to_asteroid_body / np.pi,
+            surface_distance / (max_dist + 1e-6),
             asteroid.radius / max_radius
         ])
 
