@@ -34,16 +34,6 @@ class TRPOAgent:
         self.policy_optimizer = optim.Adam(self.policy.parameters(), lr=lr)
         self.value_optimizer = optim.Adam(self.value.parameters(), lr=lr)
 
-    def select_action(self, state):
-        state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
-        mean, log_std = self.policy(state)
-        std = torch.exp(log_std)
-        cov = torch.diag_embed(std.squeeze(0)**2)
-        dist = MultivariateNormal(mean.squeeze(0), cov)
-        action = dist.sample()
-        log_prob = dist.log_prob(action)
-        return action.cpu().numpy(), log_prob
-
     def compute_advantages(self, states, rewards, next_states):
         # ИСПРАВЛЕНИЕ: Используем np.stack вместо np.array для списков numpy-массивов
         states = torch.from_numpy(np.stack(states)).float().to(self.device)
@@ -81,10 +71,15 @@ class TRPOAgent:
             advantages = advantages.to(self.device).float()
 
         mean, log_std = self.policy(states)
-        std = torch.exp(log_std)
-        cov = torch.diag_embed(std**2)
-        dist = MultivariateNormal(mean, cov)
-        log_probs_new = dist.log_prob(actions)
+        std = torch.exp(log_std).clamp(1e-3, 1.0)
+
+        actions = actions.clamp(-0.999999, 0.999999)
+        raw_actions = torch.atanh(actions)
+
+        normal = torch.distributions.Normal(mean, std)
+        log_probs_raw = normal.log_prob(raw_actions).sum(-1)
+        squash_correction = torch.log(1 - actions.pow(2) + 1e-6).sum(-1)
+        log_probs_new = log_probs_raw - squash_correction
         ratio = torch.exp(log_probs_new - log_probs_old)
         return (ratio * advantages).mean()
 
@@ -228,14 +223,19 @@ class TRPOAgent:
         mean, log_std = self.policy(state)
         
         if deterministic:
-            return mean.squeeze(0).detach().cpu().numpy(), None
-            
-        std = torch.exp(log_std)
-        cov = torch.diag_embed(std.squeeze(0)**2)
-        dist = MultivariateNormal(mean.squeeze(0), cov)
-        action = dist.sample()
-        log_prob = dist.log_prob(action)
-        return action.cpu().numpy(), log_prob
+            action = torch.tanh(mean)
+            return action.squeeze(0).detach().cpu().numpy(), None
+
+        std = torch.exp(log_std).clamp(1e-3, 1.0)
+        dist = torch.distributions.Normal(mean, std)
+        raw_action = dist.sample()
+        action = torch.tanh(raw_action)
+
+        log_prob_raw = dist.log_prob(raw_action).sum(-1)
+        squash_correction = torch.log(1 - action.pow(2) + 1e-6).sum(-1)
+        log_prob = log_prob_raw - squash_correction
+
+        return action.squeeze(0).detach().cpu().numpy(), log_prob.squeeze(0)
 
     def save(self, path):
         torch.save({
