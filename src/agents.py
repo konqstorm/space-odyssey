@@ -55,57 +55,59 @@ class REINFORCEAgent:
         self.entropy_coeff = entropy_coeff
         self.vf_coeff = vf_coeff
         self.update_epochs = update_epochs
-        
-        self.policy = PolicyNetwork(env.observation_space.shape[0])
-        self.value = ValueNetwork(env.observation_space.shape[0])
-        
+        # device selection (use CUDA if available)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.policy = PolicyNetwork(env.observation_space.shape[0]).to(self.device)
+        self.value = ValueNetwork(env.observation_space.shape[0]).to(self.device)
+
         self.policy_optimizer = optim.Adam(self.policy.parameters(), lr=lr)
         self.value_optimizer = optim.Adam(self.value.parameters(), lr=lr)
 
     def select_action(self, state, deterministic=False):
-        state_t = torch.from_numpy(state).float().unsqueeze(0)
+        state_t = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
         mean, log_std = self.policy(state_t)
         std = torch.exp(log_std).clamp(1e-3, 1.0)
-        
+
         if deterministic:
             action = torch.tanh(mean)
-            return action.squeeze(0).detach().numpy(), None, None
-        
+            return action.squeeze(0).detach().cpu().numpy(), None, None
+
         dist = Normal(mean, std)
         raw_action = dist.rsample()
         action = torch.tanh(raw_action)
 
         log_prob = dist.log_prob(raw_action).sum(-1)
         entropy = dist.entropy().sum(-1)
-        
-        return action.squeeze(0).detach().numpy(), log_prob, entropy
+
+        return action.squeeze(0).detach().cpu().numpy(), log_prob, entropy
 
     def sample_action(self, state):
-        state_t = torch.from_numpy(state).float().unsqueeze(0)
+        state_t = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
         with torch.no_grad():
             mean, log_std = self.policy(state_t)
             std = torch.exp(log_std).clamp(1e-3, 1.0)
             dist = Normal(mean, std)
             raw_action = dist.sample()
             action = torch.tanh(raw_action)
-        return action.squeeze(0).numpy()
+        return action.squeeze(0).cpu().numpy()
 
     def sample_actions(self, states):
-        states_t = torch.from_numpy(states).float()
+        states_t = torch.from_numpy(states).float().to(self.device)
         with torch.no_grad():
             mean, log_std = self.policy(states_t)
             std = torch.exp(log_std).clamp(1e-3, 1.0)
             dist = Normal(mean, std)
             raw_actions = dist.sample()
             actions = torch.tanh(raw_actions)
-        return actions.numpy()
+        return actions.cpu().numpy()
 
     def update(self, trajectory):
         states, actions, returns = trajectory
         
-        states_t = torch.from_numpy(np.stack(states)).float()
-        actions_t = torch.from_numpy(np.stack(actions)).float()
-        returns_t = torch.tensor(returns, dtype=torch.float32)
+        states_t = torch.from_numpy(np.stack(states)).float().to(self.device)
+        actions_t = torch.from_numpy(np.stack(actions)).float().to(self.device)
+        returns_t = torch.tensor(returns, dtype=torch.float32).to(self.device)
 
         raw_actions = torch.atanh(actions_t.clamp(-0.999999, 0.999999))
 
@@ -148,7 +150,7 @@ class REINFORCEAgent:
         }, path)
 
     def load(self, path="best_reinforce.pth"):
-        ckpt = torch.load(path)
+        ckpt = torch.load(path, map_location=self.device)
         self.policy.load_state_dict(ckpt['policy'])
         self.value.load_state_dict(ckpt['value'])
         self.policy.eval()
@@ -174,36 +176,44 @@ class TRPOAgent:
         self.gamma = gamma
         self.delta = delta
         self.cg_damping = cg_damping
-        self.policy = PolicyNetwork(env.observation_space.shape[0])
-        self.value = ValueNetwork(env.observation_space.shape[0])
+        # device selection
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.policy = PolicyNetwork(env.observation_space.shape[0]).to(self.device)
+        self.value = ValueNetwork(env.observation_space.shape[0]).to(self.device)
         self.policy_optimizer = optim.Adam(self.policy.parameters(), lr=lr)
         self.value_optimizer = optim.Adam(self.value.parameters(), lr=lr)
 
     def select_action(self, state):
-        state = torch.from_numpy(state).float().unsqueeze(0)
+        state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
         mean, log_std = self.policy(state)
         std = torch.exp(log_std)
         cov = torch.diag_embed(std.squeeze(0)**2)
         dist = MultivariateNormal(mean.squeeze(0), cov)
         action = dist.sample()
         log_prob = dist.log_prob(action)
-        return action.numpy(), log_prob
+        return action.cpu().numpy(), log_prob
 
     def compute_advantages(self, states, rewards, next_states):
         # ИСПРАВЛЕНИЕ: Используем np.stack вместо np.array для списков numpy-массивов
-        states = torch.from_numpy(np.stack(states)).float()
-        next_states = torch.from_numpy(np.stack(next_states)).float()
+        states = torch.from_numpy(np.stack(states)).float().to(self.device)
+        next_states = torch.from_numpy(np.stack(next_states)).float().to(self.device)
         values = self.value(states).squeeze(-1).detach()
         next_values = self.value(next_states).squeeze(-1).detach()
-        deltas = torch.tensor(rewards).float() + self.gamma * next_values - values
+
+        rewards_t = torch.as_tensor(rewards, dtype=torch.float32, device=self.device)
+        deltas = rewards_t + self.gamma * next_values - values
+
         advantages = []
-        adv = 0.0
+        adv = torch.tensor(0.0, device=self.device)
         for delta in reversed(deltas):
             adv = delta + self.gamma * adv
             advantages.insert(0, adv)
-        return torch.tensor(advantages).float()
+        return torch.stack(advantages).float()
 
     def surrogate_loss(self, log_probs_old, advantages, states, actions):
+        states = states.to(self.device) if isinstance(states, torch.Tensor) else states
+        actions = actions.to(self.device) if isinstance(actions, torch.Tensor) else actions
         mean, log_std = self.policy(states)
         std = torch.exp(log_std)
         cov = torch.diag_embed(std**2)
@@ -236,7 +246,7 @@ class TRPOAgent:
         return kl
 
     def conjugate_gradient(self, A, b, nsteps=10):
-        x = torch.zeros_like(b)
+        x = torch.zeros_like(b).to(self.device)
         r = b.clone()
         p = b.clone()
         for _ in range(nsteps):
@@ -253,11 +263,12 @@ class TRPOAgent:
         self.old_policy = copy.deepcopy(self.policy)
         advantages = self.compute_advantages(states, rewards, next_states)
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-        
-        # ИСПРАВЛЕНИЕ: np.stack
-        states_t = torch.from_numpy(np.stack(states)).float()
-        actions_t = torch.from_numpy(np.stack(actions)).float()
-        log_probs_old = torch.cat([lp.view(1) for lp in log_probs])
+
+        # prepare tensors on device
+        states_t = torch.from_numpy(np.stack(states)).float().to(self.device)
+        actions_t = torch.from_numpy(np.stack(actions)).float().to(self.device)
+        log_probs_old = torch.cat([lp.view(1) for lp in log_probs]).to(self.device)
+
         surr = self.surrogate_loss(log_probs_old, advantages, states_t, actions_t)
         grad = torch.autograd.grad(surr, self.policy.parameters())
         grad = torch.cat([g.view(-1) for g in grad]).detach()
@@ -294,18 +305,18 @@ class TRPOAgent:
             self.value_optimizer.step()
 
     def select_action(self, state, deterministic=False):
-        state = torch.from_numpy(state).float().unsqueeze(0)
+        state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
         mean, log_std = self.policy(state)
         
         if deterministic:
-            return mean.squeeze(0).detach().numpy(), None
+            return mean.squeeze(0).detach().cpu().numpy(), None
             
         std = torch.exp(log_std)
         cov = torch.diag_embed(std.squeeze(0)**2)
         dist = MultivariateNormal(mean.squeeze(0), cov)
         action = dist.sample()
         log_prob = dist.log_prob(action)
-        return action.numpy(), log_prob
+        return action.cpu().numpy(), log_prob
 
     def save(self, path):
         torch.save({
@@ -314,7 +325,7 @@ class TRPOAgent:
         }, path)
 
     def load(self, path):
-        checkpoint = torch.load(path)
+        checkpoint = torch.load(path, map_location=self.device)
         self.policy.load_state_dict(checkpoint['policy'])
         self.value.load_state_dict(checkpoint['value'])
         self.policy.eval()

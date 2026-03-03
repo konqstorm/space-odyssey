@@ -103,7 +103,9 @@ def train_reinforce(env, episodes=5000, batch_size=12, lr=3e-4, entropy_coeff=0.
             agent.save(os.path.join(save_path, "best_reinforce.pth"))
             print(f"--> Новая лучшая модель REINFORCE сохранена! Reward = {best_reward:.2f}")
 
-def train_trpo(env, episodes=1000, save_path="best_model_trpo.pth"):
+def train_trpo(env, episodes=1000, save_path="trpo"):
+    os.makedirs(save_path, exist_ok=True)
+
     agent = TRPOAgent(env)
     best_reward = -np.inf
     
@@ -126,8 +128,8 @@ def train_trpo(env, episodes=1000, save_path="best_model_trpo.pth"):
         
         ep_reward = sum(trajectory[2])
         print(f"Episode {ep}, Reward: {ep_reward:.2f}")
-        
+
         if ep_reward > best_reward:
             best_reward = ep_reward
-            agent.save(save_path)
+            agent.save(os.path.join(save_path,'best_model_trpo.pth'))
             print(f"--> Новая лучшая модель TRPO сохранена! Reward = {best_reward:.2f}")
