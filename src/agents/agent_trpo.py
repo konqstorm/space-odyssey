@@ -5,6 +5,7 @@ import numpy as np
 import copy
 from .policy import PolicyNetwork
 from .value import ValueNetwork
+from .value_2 import ValueNetwork2
 
 
 class TRPOAgent:
@@ -30,7 +31,7 @@ class TRPOAgent:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.policy = PolicyNetwork(env.observation_space.shape[0]).to(self.device)
-        self.value = ValueNetwork(env.observation_space.shape[0]).to(self.device)
+        self.value = ValueNetwork2(env.observation_space.shape[0]).to(self.device)
         self.policy_optimizer = optim.Adam(self.policy.parameters(), lr=lr)
         self.value_optimizer = optim.Adam(self.value.parameters(), lr=lr)
 

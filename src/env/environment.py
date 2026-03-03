@@ -144,4 +144,7 @@ class SpaceEnv(gym.Env):
             "termination_reason": termination_reason,
             "distance_to_goal": float(distance),
         }
+        reward_components = getattr(self, "_last_reward_components", None)
+        if isinstance(reward_components, dict):
+            info.update(reward_components)
         return get_observation(self), reward, done, truncated, info

@@ -22,6 +22,13 @@ def _trpo_iterations(env, agent, config):
         done, truncated = False, False
         trajectory = ([], [], [], [], [])
         termination_reason = "unknown"
+        reward_component_sums = {
+            "reward_progress": 0.0,
+            "reward_alignment": 0.0,
+            "reward_wobble": 0.0,
+            "reward_avoid": 0.0,
+            "reward_terminal": 0.0,
+        }
         
         while not (done or truncated):
             action, log_prob = agent.select_action(state)
@@ -31,6 +38,10 @@ def _trpo_iterations(env, agent, config):
             trajectory[2].append(reward)
             trajectory[3].append(log_prob)
             trajectory[4].append(next_state)
+
+            for key in reward_component_sums:
+                reward_component_sums[key] += float(info.get(key, 0.0))
+
             state = next_state
             if done or truncated:
                 termination_reason = info.get("termination_reason", "unknown")
@@ -39,9 +50,16 @@ def _trpo_iterations(env, agent, config):
         
         ep_reward = float(sum(trajectory[2]))
         success_rate = 100.0 if termination_reason == "goal" else 0.0
+        comp_line = (
+            f" | C: prog={reward_component_sums['reward_progress']:+7.1f}"
+            f" align={reward_component_sums['reward_alignment']:+7.1f}"
+            f" wobble={reward_component_sums['reward_wobble']:+7.1f}"
+            f" avoid={reward_component_sums['reward_avoid']:+7.1f}"
+            f" term={reward_component_sums['reward_terminal']:+7.1f}"
+        )
         yield TrainStepResult(
             score=ep_reward,
-            log_line=f"Episode {ep:4d} | Reward: {ep_reward:8.2f}",
+            log_line=f"Episode {ep:4d} | Reward: {ep_reward:8.2f}{comp_line}",
             batch_idx=ep + 1,
             avg_reward=ep_reward,
             success_rate=success_rate,
