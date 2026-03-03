@@ -1,7 +1,7 @@
 torch_num_threads: 12
 seed: null
 watch:
-  agent: reinforce
-  model_path: chosen_models/reinforce/best_reinforce.pth
+  agent: trpo
+  model_path: runs/20260303_182312_trpo/best_model_trpo.pth
 train:
   runs_dir: runs

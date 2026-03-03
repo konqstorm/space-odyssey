@@ -245,7 +245,17 @@ class TRPOAgent:
 
     def load(self, path):
         checkpoint = torch.load(path, map_location=self.device)
-        self.policy.load_state_dict(checkpoint['policy'])
-        self.value.load_state_dict(checkpoint['value'])
+        try:
+            self.policy.load_state_dict(checkpoint['policy'])
+            self.value.load_state_dict(checkpoint['value'])
+        except RuntimeError as exc:
+            ckpt_in = checkpoint.get("policy", {}).get("fc1.weight", None)
+            ckpt_in_dim = ckpt_in.shape[1] if ckpt_in is not None else "unknown"
+            env_in_dim = self.env.observation_space.shape[0]
+            raise RuntimeError(
+                f"Checkpoint is incompatible with current environment observation size: "
+                f"checkpoint input_dim={ckpt_in_dim}, env input_dim={env_in_dim}. "
+                f"Use a model trained with the same env config (e.g. num_asteroids)."
+            ) from exc
         self.policy.eval()
         self.value.eval()
