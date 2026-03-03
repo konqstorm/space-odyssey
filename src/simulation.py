@@ -20,7 +20,7 @@ def watch_agent(env, agent_class, model_path):
                     running = False
             
             # Используем deterministic=True, чтобы агент не "дрожал", а выбирал лучшие действия
-            action_out = agent.select_action(state, deterministic=False)
+            action_out = agent.select_action(state, deterministic=True)
             if isinstance(action_out, tuple):
                 action = action_out[0]
             else:

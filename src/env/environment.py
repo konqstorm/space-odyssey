@@ -105,7 +105,7 @@ class SpaceEnv(gym.Env):
 
     def step(self, action):
         # First action channel is forward thrust in [-1, 1], where <= 0 means no forward thrust.
-        forward_thrust = action[0]
+        forward_thrust = (action[0] + 1.0) / 2.0
         rot_thrust = action[1]
 
         forward_thrust = np.clip(forward_thrust, 0.0, 1.0)

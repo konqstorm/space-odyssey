@@ -13,7 +13,7 @@ def reward_function(env):
     d0 = 0.12     # ширина "зоны усиления" в долях max_dist
     near_goal_boost = 1.0 + alpha / (1.0 + (dist_norm / d0) ** 2)
 
-    progress_reward = (ddist / (0.01 + ship_velocity)) * 0.1 * near_goal_boost
+    progress_reward = (ddist / (0.01 + ship_velocity)) * 0.3 * near_goal_boost
 
     # Добавляем форму награды за стабилизацию курса на цель
     dx = env.goal[0] - env.ship.position[0]
@@ -24,7 +24,7 @@ def reward_function(env):
     align_cos_reward = 0.1 * np.cos(angle_error)
     align_sin_penalty = -0.1 * abs(np.sin(angle_error))
     ang_vel_abs_penalty = -0.1 * abs(env.ship.angular_velocity)
-    ang_vel_sq_penalty = -0.03 * (env.ship.angular_velocity ** 2) # штраф за "дрожание" при попытке стабилизации
+    ang_vel_sq_penalty = -0.02 * (env.ship.angular_velocity ** 2) # штраф за "дрожание" при попытке стабилизации
     #reward += 0.01 * np.linalg.norm(env.ship.velocity)
 
     # --- Obstacle shaping: штрафуем опасную близость и "влет" в астероид ---
@@ -75,7 +75,7 @@ def reward_function(env):
         
     for asteroid in env.asteroids:
         if np.linalg.norm(env.ship.position - asteroid.position) < env.ship.radius + asteroid.radius:
-            collision_penalty = -50.0
+            collision_penalty = -500.0
             reward += collision_penalty
             break
     

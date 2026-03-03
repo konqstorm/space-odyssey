@@ -4,7 +4,6 @@ from torch.distributions import MultivariateNormal
 import numpy as np
 import copy
 from .policy import PolicyNetwork
-from .value import ValueNetwork
 from .value_2 import ValueNetwork2
 
 
@@ -35,22 +34,14 @@ class TRPOAgent:
         self.policy_optimizer = optim.Adam(self.policy.parameters(), lr=lr)
         self.value_optimizer = optim.Adam(self.value.parameters(), lr=lr)
 
-    def compute_advantages(self, states, rewards, next_states):
-        # ИСПРАВЛЕНИЕ: Используем np.stack вместо np.array для списков numpy-массивов
-        states = torch.from_numpy(np.stack(states)).float().to(self.device)
-        next_states = torch.from_numpy(np.stack(next_states)).float().to(self.device)
-        values = self.value(states).squeeze(-1).detach()
-        next_values = self.value(next_states).squeeze(-1).detach()
-
+    def compute_returns(self, rewards):
         rewards_t = torch.as_tensor(rewards, dtype=torch.float32, device=self.device)
-        deltas = rewards_t + self.gamma * next_values - values
-
-        advantages = []
-        adv = torch.tensor(0.0, device=self.device)
-        for delta in reversed(deltas):
-            adv = delta + self.gamma * adv
-            advantages.insert(0, adv)
-        return torch.stack(advantages).float()
+        returns = []
+        running_return = torch.tensor(0.0, device=self.device)
+        for reward in reversed(rewards_t):
+            running_return = reward + self.gamma * running_return
+            returns.insert(0, running_return)
+        return torch.stack(returns).float()
 
     def surrogate_loss(self, log_probs_old, advantages, states, actions):
         # ensure tensors on correct device
@@ -158,12 +149,20 @@ class TRPOAgent:
         except Exception:
             pass
         self.old_policy.eval()
-        advantages = self.compute_advantages(states, rewards, next_states)
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-
         # prepare tensors on device
         states_t = torch.from_numpy(np.stack(states)).float().to(self.device)
         actions_t = torch.from_numpy(np.stack(actions)).float().to(self.device)
+
+        returns = self.compute_returns(rewards)
+        if returns.numel() > 1:
+            returns_norm = (returns - returns.mean()) / (returns.std() + 1e-8)
+        else:
+            returns_norm = returns
+
+        values_detached = self.value(states_t).squeeze(-1).detach()
+        advantages = returns_norm - values_detached
+        if advantages.numel() > 1:
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         # stack/convert log_probs safely and detach
         lp_list = []
         for lp in log_probs:
@@ -211,7 +210,7 @@ class TRPOAgent:
                 p_numel = p.numel()
                 p.data.copy_(old_params[idx:idx+p_numel].view(p.shape))
                 idx += p_numel
-        values_target = advantages + self.value(states_t).squeeze(-1).detach()
+        values_target = returns_norm.detach()
         for _ in range(self.value_update_steps):
             self.value_optimizer.zero_grad()
             values = self.value(states_t).squeeze(-1)
