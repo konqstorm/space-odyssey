@@ -10,7 +10,7 @@ venv/
 .vscode/
 
 # Training artifacts
-models/
+runs/
 
 # OS files
 .DS_Store

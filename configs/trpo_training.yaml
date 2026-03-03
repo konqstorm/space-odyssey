@@ -1,0 +1,8 @@
+episodes: 1000
+lr: 0.001
+gamma: 0.99
+delta: 0.01
+cg_damping: 0.1
+cg_steps: 10
+line_search_steps: 10
+value_update_steps: 10

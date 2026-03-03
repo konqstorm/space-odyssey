@@ -1,6 +1,6 @@
 # manual_control.py
 import pygame
-from visualization import Renderer
+from src.visualization import Renderer
 import numpy as np
 
 def manual_control(env):

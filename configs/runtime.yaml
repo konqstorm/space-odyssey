@@ -1,0 +1,7 @@
+torch_num_threads: 12
+seed: null
+watch:
+  agent: reinforce
+  model_path: chosen_models/reinforce/best_reinforce.pth
+train:
+  runs_dir: runs

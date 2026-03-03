@@ -1,21 +1,32 @@
 import numpy as np
-from agents import REINFORCEAgent, TRPOAgent
-import os
-from environment import SpaceEnv
+from src.agents import REINFORCEAgent
+from src.env import SpaceEnv
+from .training import TrainStepResult, run_training_loop
 
-def train_reinforce(env, episodes=5000, batch_size=12, lr=3e-4, entropy_coeff=0.002, save_path="reinforce"):
-    os.makedirs(save_path, exist_ok=True)
 
-    def compute_returns(rewards, gamma):
-        R = 0
-        returns = []
-        for r in reversed(rewards):
-            R = r + gamma * R
-            returns.insert(0, R)
-        return returns
+def _build_reinforce_agent(env, config):
+    return REINFORCEAgent(
+        env,
+        lr=float(config["lr"]),
+        gamma=float(config["gamma"]),
+        entropy_coeff=float(config["entropy_coeff"]),
+        vf_coeff=float(config["vf_coeff"]),
+        update_epochs=int(config["update_epochs"]),
+    )
 
-    agent = REINFORCEAgent(env, lr=lr, entropy_coeff=entropy_coeff, vf_coeff=0.5)
-    best_reward = -np.inf
+
+def _compute_returns(rewards, gamma):
+    ret = 0.0
+    returns = []
+    for reward in reversed(rewards):
+        ret = reward + gamma * ret
+        returns.insert(0, ret)
+    return returns
+
+
+def _reinforce_iterations(env, agent, config):
+    episodes = int(config["episodes"])
+    batch_size = int(config["batch_size"])
     total_ep = 0
     batch_idx = 0
     env_kwargs = {
@@ -72,7 +83,7 @@ def train_reinforce(env, episodes=5000, batch_size=12, lr=3e-4, entropy_coeff=0.
         for traj in batch_trajectories:
             states, actions, rewards = traj
             
-            ep_returns = compute_returns(rewards, agent.gamma)
+            ep_returns = _compute_returns(rewards, agent.gamma)
 
             states_all.extend(states)
             actions_all.extend(actions)
@@ -89,47 +100,33 @@ def train_reinforce(env, episodes=5000, batch_size=12, lr=3e-4, entropy_coeff=0.
         reason_counts = {reason: batch_reasons.count(reason) for reason in sorted(set(batch_reasons))}
         reason_summary = ", ".join([f"{k}:{v}" for k, v in reason_counts.items()])
 
-        print(f"Batch {batch_idx:3d} | "
-              f"Avg Reward: {avg_reward:8.2f} | "
-              f"Best in batch: {max_in_batch:8.2f} | "
-              f"Global best: {best_reward:8.2f} | "
-              f"Success: {success_rate:5.1f}% | "
-              f"Avg len: {avg_len:6.1f} | "
-              f"Done: {reason_summary}")
+        log_line = (
+            f"Batch {batch_idx:3d} | "
+            f"Avg Reward: {avg_reward:8.2f} | "
+            f"Best in batch: {max_in_batch:8.2f} | "
+            f"Success: {success_rate:5.1f}% | "
+            f"Avg len: {avg_len:6.1f} | "
+            f"Done: {reason_summary}"
+        )
+        yield TrainStepResult(
+            score=float(avg_reward),
+            log_line=log_line,
+            batch_idx=batch_idx,
+            avg_reward=float(avg_reward),
+            success_rate=float(success_rate),
+            termination_counts=reason_counts,
+        )
 
-        agent.save(os.path.join(save_path, "last_reinforce.pth"))
-        if avg_reward > best_reward:
-            best_reward = avg_reward
-            agent.save(os.path.join(save_path, "best_reinforce.pth"))
-            print(f"--> Новая лучшая модель REINFORCE сохранена! Reward = {best_reward:.2f}")
 
-def train_trpo(env, episodes=1000, save_path="trpo"):
-    os.makedirs(save_path, exist_ok=True)
-
-    agent = TRPOAgent(env)
-    best_reward = -np.inf
-    
-    for ep in range(episodes):
-        state, _ = env.reset()
-        done, truncated = False, False
-        trajectory = ([], [], [], [], [])
-        
-        while not (done or truncated):
-            action, log_prob = agent.select_action(state)
-            next_state, reward, done, truncated, _ = env.step(action)
-            trajectory[0].append(state)
-            trajectory[1].append(action)
-            trajectory[2].append(reward)
-            trajectory[3].append(log_prob)
-            trajectory[4].append(next_state)
-            state = next_state
-            
-        agent.update(trajectory)
-        
-        ep_reward = sum(trajectory[2])
-        print(f"Episode {ep}, Reward: {ep_reward:.2f}")
-
-        if ep_reward > best_reward:
-            best_reward = ep_reward
-            agent.save(os.path.join(save_path,'best_model_trpo.pth'))
-            print(f"--> Новая лучшая модель TRPO сохранена! Reward = {best_reward:.2f}")
+def train_reinforce(env, config, *, runs_root="runs", used_configs=None):
+    return run_training_loop(
+        env,
+        config,
+        algorithm_name="reinforce",
+        build_agent=_build_reinforce_agent,
+        run_iterations=_reinforce_iterations,
+        default_last_model_name="last_reinforce.pth",
+        default_best_model_name="best_reinforce.pth",
+        runs_root=runs_root,
+        used_configs=used_configs,
+    )

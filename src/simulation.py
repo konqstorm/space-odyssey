@@ -1,5 +1,5 @@
 import pygame
-from visualization import Renderer
+from src.visualization import Renderer
 
 def watch_agent(env, agent_class, model_path):
     print(f"Загрузка модели из {model_path}...")
@@ -20,7 +20,11 @@ def watch_agent(env, agent_class, model_path):
                     running = False
             
             # Используем deterministic=True, чтобы агент не "дрожал", а выбирал лучшие действия
-            action, _, _ = agent.select_action(state, deterministic=False)
+            action_out = agent.select_action(state, deterministic=False)
+            if isinstance(action_out, tuple):
+                action = action_out[0]
+            else:
+                action = action_out
             state, reward, done, truncated, _ = env.step(action)
             
             renderer.render()
