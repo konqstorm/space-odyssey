@@ -212,8 +212,24 @@ class TRPOAgent:
         return torch.stack(advantages).float()
 
     def surrogate_loss(self, log_probs_old, advantages, states, actions):
-        states = states.to(self.device) if isinstance(states, torch.Tensor) else states
-        actions = actions.to(self.device) if isinstance(actions, torch.Tensor) else actions
+        # ensure tensors on correct device
+        if not isinstance(states, torch.Tensor):
+            states = torch.from_numpy(np.stack(states)).float().to(self.device)
+        else:
+            states = states.to(self.device).float()
+        if not isinstance(actions, torch.Tensor):
+            actions = torch.from_numpy(np.stack(actions)).float().to(self.device)
+        else:
+            actions = actions.to(self.device).float()
+        if not isinstance(log_probs_old, torch.Tensor):
+            log_probs_old = torch.tensor(log_probs_old, dtype=torch.float32, device=self.device)
+        else:
+            log_probs_old = log_probs_old.to(self.device).detach()
+        if not isinstance(advantages, torch.Tensor):
+            advantages = torch.from_numpy(np.stack(advantages)).float().to(self.device)
+        else:
+            advantages = advantages.to(self.device).float()
+
         mean, log_std = self.policy(states)
         std = torch.exp(log_std)
         cov = torch.diag_embed(std**2)
@@ -223,16 +239,37 @@ class TRPOAgent:
         return (ratio * advantages).mean()
 
     def hessian_vector_product(self, v, states):
+        # ensure states on device
+        if not isinstance(states, torch.Tensor):
+            states = torch.from_numpy(np.stack(states)).float().to(self.device)
+        else:
+            states = states.to(self.device).float()
+
         kl = self.kl_divergence(states)
         grads = torch.autograd.grad(kl, self.policy.parameters(), create_graph=True)
+        # replace None grads with zeros
+        grads = [g if g is not None else torch.zeros_like(p) for g, p in zip(grads, self.policy.parameters())]
         flat_grad = torch.cat([grad.contiguous().view(-1) for grad in grads])
         kl_v = torch.sum(flat_grad * v)
         grads2 = torch.autograd.grad(kl_v, self.policy.parameters())
+        grads2 = [g if g is not None else torch.zeros_like(p) for g, p in zip(grads2, self.policy.parameters())]
         flat_hvp = torch.cat([grad.contiguous().view(-1) for grad in grads2])
         return flat_hvp
 
     def kl_divergence(self, states):
-        states = torch.from_numpy(np.array(states)).float() if not isinstance(states, torch.Tensor) else states
+        # convert states to tensor on correct device
+        if not isinstance(states, torch.Tensor):
+            states = torch.from_numpy(np.stack(states)).float().to(self.device)
+        else:
+            states = states.to(self.device).float()
+
+        # ensure old_policy is on device
+        if hasattr(self, 'old_policy'):
+            try:
+                self.old_policy.to(self.device)
+            except Exception:
+                pass
+
         with torch.no_grad():
             mean_old, log_std_old = self.old_policy(states)
         std_old = torch.exp(log_std_old)
@@ -249,25 +286,46 @@ class TRPOAgent:
         x = torch.zeros_like(b).to(self.device)
         r = b.clone()
         p = b.clone()
+        r_old_sq = (r @ r)
         for _ in range(nsteps):
             Ap = A(p)
-            alpha = (r @ r) / (p @ Ap)
-            x += alpha * p
-            r -= alpha * Ap
-            beta = (r @ r) / (r @ r + 1e-8)
+            denom = (p @ Ap).item()
+            if denom == 0:
+                break
+            alpha = r_old_sq / (denom + 1e-8)
+            x = x + alpha * p
+            r = r - alpha * Ap
+            r_new_sq = (r @ r)
+            if r_old_sq.item() == 0:
+                break
+            beta = r_new_sq / (r_old_sq + 1e-8)
             p = r + beta * p
+            r_old_sq = r_new_sq
         return x
 
     def update(self, trajectory):
         states, actions, rewards, log_probs, next_states = trajectory
         self.old_policy = copy.deepcopy(self.policy)
+        # ensure old_policy on correct device and eval mode
+        try:
+            self.old_policy.to(self.device)
+        except Exception:
+            pass
+        self.old_policy.eval()
         advantages = self.compute_advantages(states, rewards, next_states)
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         # prepare tensors on device
         states_t = torch.from_numpy(np.stack(states)).float().to(self.device)
         actions_t = torch.from_numpy(np.stack(actions)).float().to(self.device)
-        log_probs_old = torch.cat([lp.view(1) for lp in log_probs]).to(self.device)
+        # stack/convert log_probs safely and detach
+        lp_list = []
+        for lp in log_probs:
+            if isinstance(lp, torch.Tensor):
+                lp_list.append(lp.detach().to(self.device).view(-1))
+            else:
+                lp_list.append(torch.tensor(lp, dtype=torch.float32, device=self.device).view(-1))
+        log_probs_old = torch.cat(lp_list).view(-1).detach()
 
         surr = self.surrogate_loss(log_probs_old, advantages, states_t, actions_t)
         grad = torch.autograd.grad(surr, self.policy.parameters())
@@ -276,8 +334,10 @@ class TRPOAgent:
             return self.hessian_vector_product(v, states_t) + self.cg_damping * v
         step_dir = self.conjugate_gradient(Hvp, grad)
         shs = 0.5 * (step_dir @ Hvp(step_dir))
+        if shs <= 0:
+            return
         lm = torch.sqrt(shs / self.delta)
-        full_step = step_dir / lm
+        full_step = step_dir / (lm + 1e-12)
         old_params = torch.cat([p.view(-1) for p in self.policy.parameters()]).detach()
         def linesearch(alpha):
             new_params = old_params + alpha * full_step
@@ -292,10 +352,19 @@ class TRPOAgent:
                 return True
             return False
         alpha = 1.0
+        accepted = False
         for _ in range(10):
             if linesearch(alpha):
+                accepted = True
                 break
             alpha *= 0.5
+        # restore old params if linesearch failed
+        if not accepted:
+            idx = 0
+            for p in self.policy.parameters():
+                p_numel = p.numel()
+                p.data.copy_(old_params[idx:idx+p_numel].view(p.shape))
+                idx += p_numel
         values_target = advantages + self.value(states_t).squeeze(-1).detach()
         for _ in range(10):
             self.value_optimizer.zero_grad()
