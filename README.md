@@ -8,7 +8,9 @@ At each discrete time step $t$, the agent selects an action $a_t$ consisting of 
 
 The learning objective is to maximize the expected discounted cumulative reward:
 
-$J(\theta)=\mathbb{E}_{\pi_\theta}\left[\sum_{t=0}^{T-1}\gamma^t r_t\right]$
+$$
+J(\theta)=\mathbb{E}_{\pi_\theta}\left[\sum_{t=0}^{T-1}\gamma^t r_t\right]
+$$
 
 where:
 - $\pi_\theta(a|s)$ is the policy parameterized by $\theta$,
@@ -28,9 +30,7 @@ The environment returns an **observation vector** $o_t \in \mathbb{R}^d$.
 
 The observation dimension is
 
-$$
-d = 2 + 2 + 1 + 1 + 2 + 3N = 8 + 3N, \qquad N = \texttt{num\_asteroids}.
-$$
+$$d=2+2+1+1+2+3N=8+3N, \qquad N = \texttt{num\_asteroids}$$
 
 
 The components correspond to:
@@ -50,8 +50,23 @@ The action is $$a_t=(a_t^{\text{thrust}}, a_t^{\text{rot}})\in[-1,1]^2.$$
 
 #### Forward thrust remapping
 
-Let $\sigma(x)=\frac{1}{1+e^{-x}}$, $k=\texttt{throttle\_gain}$, $c=\texttt{throttle\_center}$, and $a=\mathrm{clip}(a_t^{\text{thrust}},-1,1)$. Then:
-
+Let 
+$$
+\sigma(x)=\frac{1}{1+e^{-x}}
+$$
+, 
+$$
+k=\texttt{throttle\_gain}
+$$
+, 
+$$
+c=\texttt{throttle\_center}
+$$
+, and 
+$$
+a=\mathrm{clip}(a_t^{\text{thrust}},-1,1)
+$$. 
+Then:
 $$
 u_t=\mathrm{clip}\left(
 \frac{\sigma(k(a-c))-\sigma(k(-1-c))}
@@ -143,30 +158,30 @@ The episode terminates with `termination_reason="asteroid"`.
 3) **Timeout**
 
 $$
-t \ge \texttt{max\_steps}
+t\ge\texttt{max\_steps}
 $$
 
 ---
 
 ## Reward function
 
-Reward is computed by `reward_function(env)` in `src/env/reward.py` and returned each step by `SpaceEnv.step`. :contentReference[oaicite:7]{index=7}
+Reward is computed by `reward_function(env)` in `src/env/reward.py` and returned each step by `SpaceEnv.step`.
 
 Let:
-- $d_t=\|p_t-g\|_2$ (distance to goal),
-- $\Delta d = d_{t-1}-d_t$ (progress),
-- $D=\sqrt{W^2+H^2}$ with $(W,H)=\texttt{space\_size}$,
-- $\text{dist\_norm}=d_t/(D+\varepsilon)$.
+- $d_t = \|p_t - g\|_2$ (distance to goal)
+- $\Delta d = d_{t-1} - d_t$ (progress)
+- $D = \sqrt{W^2 + H^2}$ with $(W,H) = \texttt{space\_size}$
+- $\text{dist\_norm} = \frac{d_t}{D + \varepsilon}$
 
-### Terminal events 
+### Terminal events
 
-The environment terminates on goal/collision/timeout, and the code assigns terminal rewards accordingly.
+The environment terminates on goal, collision, or timeout, and the code assigns terminal rewards accordingly.
 
 | Event | Condition | Reward |
 |---|---|---:|
-| Goal reached | $\|p_t-g\|_2 < r_{\text{ship}} + 5$ | $+500$ |
-| Collision | $\|p_t-p^{ast}\|_2 < r_{\text{ship}} + r_{\text{ast}}$ | $-200$ |
-| Timeout | episode ends by timeout (truncated) | $-0.01\cdot \|p_t-g\|_2$ |
+| Goal reached | $\|p_t - g\|_2 < r_{\text{ship}} + 5$ | $+500$ |
+| Collision | $\|p_t - p^{ast}\|_2 < r_{\text{ship}} + r_{\text{ast}}$ | $-200$ |
+| Timeout | episode ends by timeout (truncated) | $-0.01\,\|p_t - g\|_2$ |
 
 ---
 
@@ -178,9 +193,7 @@ $z_t \sim \mathcal{N}(\mu_\theta(o_t), \sigma_\theta(o_t))$, $a_t=\tanh(z_t)$.
 The REINFORCE gradient is estimated as
 
 $$
-\nabla_\theta J(\theta)
-=
-\mathbb{E}\left[\sum_{t=0}^{T-1}\nabla_\theta \log\pi_\theta(a_t|o_t)\,G_t\right],
+\nabla_\theta J(\theta)=\mathbb{E}\left[\sum_{t=0}^{T-1}\nabla_\theta \log\pi_\theta(a_t|o_t)\,G_t\right],
 \qquad
 G_t=\sum_{k=t}^{T-1}\gamma^{k-t} r_k.
 $$
@@ -188,9 +201,7 @@ $$
 A baseline $b(o_t)=V_\phi(o_t)$ is used (value network):
 
 $$
-\nabla_\theta J(\theta)
-=
-\mathbb{E}\left[\sum_{t=0}^{T-1}\nabla_\theta \log\pi_\theta(a_t|o_t)\,(G_t-V_\phi(o_t))\right].
+\nabla_\theta J(\theta)=\mathbb{E}\left[\sum_{t=0}^{T-1}\nabla_\theta \log\pi_\theta(a_t|o_t)\,(G_t-V_\phi(o_t))\right].
 $$
 
 In code, $\mathbb{E}[\cdot]$ is approximated by empirical means over collected samples (hence `.mean()`).
@@ -231,27 +242,19 @@ After running multiple episodes, the following metrics are computed:
 
 - **Success rate**
   
-  $$
-  \text{SuccessRate} = \frac{N_{\text{goal}}}{N_{\text{episodes}}}
-  $$
+  $\text{SuccessRate} = \frac{N_{\text{goal}}}{N_{\text{episodes}}}$
 
 - **Collision rate**
 
-  $$
-  \text{CollisionRate} = \frac{N_{\text{collision}}}{N_{\text{episodes}}}
-  $$
+  $\text{CollisionRate} = \frac{N_{\text{collision}}}{N_{\text{episodes}}}$
 
 - **Timeout rate**
 
-  $$
-  \text{TimeoutRate} = \frac{N_{\text{timeout}}}{N_{\text{episodes}}}
-  $$
+  $\text{TimeoutRate} = \frac{N_{\text{timeout}}}{N_{\text{episodes}}}$
 
 - **Average episode reward**
 
-  $$
-  \bar{R} = \frac{1}{N}\sum_{i=1}^{N} R_i
-  $$
+  $\bar{R} = \frac{1}{N}\sum_{i=1}^{N} R_i$
 
 where $R_i$ is the cumulative reward obtained in episode $i$.
 
