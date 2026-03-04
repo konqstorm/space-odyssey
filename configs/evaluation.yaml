@@ -1,0 +1,14 @@
+episodes: 10
+deterministic: true
+render: false
+
+agent:
+  type: reinforce          # reinforce | trpo
+  model_path: runs\20260304_173937_reinforce\best_reinforce.pth
+
+env_override:
+  num_asteroids: null
+  max_steps: 1000
+
+plots:
+  histogram: true      # строить гистограмму причин завершения
