@@ -8,11 +8,13 @@ from src.agents import REINFORCEAgent, TRPOAgent
 from src.training import train
 from src.manual_control import manual_control
 from src.simulation import watch_agent
+from src.evaluation import evaluate_agent, plot_termination_histogram
 from src.config import (
     load_env_config,
     load_reinforce_config,
     load_trpo_config,
     load_runtime_config,
+    load_evaluation_config
 )
 
 
@@ -60,6 +62,12 @@ def main():
         action="store_true",
         help="Просмотр обученного агента"
     )
+    mode_group.add_argument(
+        "--evaluate",
+        action="store_true",
+        help="Оценка обученного агента"
+)   
+
     parser.add_argument(
         "--config-dir",
         type=str,
@@ -72,6 +80,7 @@ def main():
     env_config = load_env_config(args.config_dir)
     reinforce_config = load_reinforce_config(args.config_dir)
     trpo_config = load_trpo_config(args.config_dir)
+    eval_cfg = load_evaluation_config(args.config_dir)
 
     torch.set_num_threads(int(runtime_config["torch_num_threads"]))
     seed = runtime_config["seed"]
@@ -158,6 +167,57 @@ def main():
         print("ESC или закрытие окна для выхода")
         print()
         watch_agent(env, agent_cls, model_path)
+
+    elif args.evaluate:
+        agent_cfg = eval_cfg["agent"]
+
+        print("=" * 60)
+        print("РЕЖИМ: ОЦЕНКА АГЕНТА")
+        print("=" * 60)
+        print(f"Агент: {agent_cfg['type']}")
+        print(f"Модель: {agent_cfg['model_path']}")
+        print(f"Эпизодов: {eval_cfg['episodes']}")
+        print()
+
+        agent_cls = _resolve_watch_agent(agent_cfg["type"])
+        # agent = agent_cls(env.observation_space, env.action_space)
+        agent = agent_cls(env)
+        agent.load(agent_cfg["model_path"])
+
+        env_override = eval_cfg.get("env_override", {})
+
+        def make_env():
+            return SpaceEnv(
+                space_size=(env_config["width"], env_config["height"]),
+                num_asteroids=(
+                    env_override.get("num_asteroids")
+                    if env_override.get("num_asteroids") is not None
+                    else env_config["num_asteroids"]
+                ),
+                max_steps=(
+                    env_override.get("max_steps")
+                    if env_override.get("max_steps") is not None
+                    else env_config["max_steps"]
+                ),
+            )
+
+        summary = evaluate_agent(
+            agent,
+            make_env_fn=make_env,
+            episodes=int(eval_cfg["episodes"]),
+            deterministic=bool(eval_cfg["deterministic"]),
+            render=bool(eval_cfg["render"]),
+        )
+
+        print("Результаты оценки:")
+        for k, v in summary.items():
+            print(f"{k}: {v}")
+
+        if eval_cfg.get("plots", {}).get("histogram", False):
+            plot_termination_histogram(
+                summary,
+                title_suffix=f"({agent_cfg['type']})",
+            )    
 
 
 if __name__ == "__main__":

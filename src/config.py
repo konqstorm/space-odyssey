@@ -75,3 +75,17 @@ def load_runtime_config(config_dir="configs"):
         "runtime.yaml",
     )
     return config
+
+def load_evaluation_config(config_dir="configs"):
+    config = _load_yaml_config(config_dir, "evaluation.yaml")
+    _require_keys(
+        config,
+        ["episodes", "deterministic", "render", "agent"],
+        "evaluation.yaml",
+    )
+    _require_keys(
+        config["agent"],
+        ["type", "model_path"],
+        "evaluation.yaml:agent",
+    )
+    return config
