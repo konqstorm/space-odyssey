@@ -93,6 +93,38 @@ class SpaceEnv(gym.Env):
         middle_region = (left_square[1], right_square[0], margin, height - margin)
         return left_square, right_square, middle_region
 
+    # def reset(self, seed=None, options=None):
+    #     left_square, right_square, middle_region = self._spawn_regions()
+
+    #     if np.random.rand() < 0.5:
+    #         ship_square, goal_square = left_square, right_square
+    #     else:
+    #         ship_square, goal_square = right_square, left_square
+
+    #     self.ship = Ship(self._uniform_point_in_box(*ship_square))
+    #     self.goal = self._uniform_point_in_box(*goal_square)
+
+    #     self.asteroids = []
+    #     safe_margin = 40.0
+
+    #     while len(self.asteroids) < self.num_asteroids:
+    #         pos = self._uniform_point_in_box(*middle_region)
+    #         radius = np.random.uniform(20.0, 150.0)
+    #         angle = np.random.uniform(0, 2 * np.pi)
+
+    #         # Keep a safe gap around both start and goal.
+    #         if (
+    #             np.linalg.norm(pos - self.goal) > (radius + safe_margin)
+    #             and np.linalg.norm(pos - self.ship.position) > (radius + safe_margin)
+    #         ):
+    #             self.asteroids.append(Asteroid(pos, radius, angle))
+
+    #     self.current_step = 0
+    #     self.prev_distance = np.linalg.norm(self.ship.position - self.goal)
+    #     self.last_action = np.array([0.0, 0.0])
+
+    #     return get_observation(self), {}
+
     def reset(self, seed=None, options=None):
         left_square, right_square, middle_region = self._spawn_regions()
 
@@ -105,19 +137,58 @@ class SpaceEnv(gym.Env):
         self.goal = self._uniform_point_in_box(*goal_square)
 
         self.asteroids = []
-        safe_margin = 40.0
+        
+        # --- НАСТРОЙКИ ГАБАРИТОВ ---
+        min_side = min(self.space_size)
+        # Увеличили макс. размер до 17% от меньшей стороны окна
+        max_asteroid_radius = min_side * 0.12 
+        min_asteroid_radius = 25.0
+        
+        # Минимальный зазор для пролета корабля (чуть больше диаметра корабля)
+        pass_margin = self.ship.radius * 3.0 
+        # Зона полной неприкосновенности вокруг старта и финиша
+        object_safe_zone = self.ship.radius * 3.0
 
-        while len(self.asteroids) < self.num_asteroids:
+        attempts = 0
+        # Пытаемся расставить нужное кол-во астероидов
+        while len(self.asteroids) < self.num_asteroids and attempts < 200:
+            attempts += 1
             pos = self._uniform_point_in_box(*middle_region)
-            radius = np.random.uniform(20.0, 150.0)
+            radius = np.random.uniform(min_asteroid_radius, max_asteroid_radius)
             angle = np.random.uniform(0, 2 * np.pi)
 
-            # Keep a safe gap around both start and goal.
-            if (
-                np.linalg.norm(pos - self.goal) > (radius + safe_margin)
-                and np.linalg.norm(pos - self.ship.position) > (radius + safe_margin)
-            ):
-                self.asteroids.append(Asteroid(pos, radius, angle))
+            # 1. Проверка: не «давим» ли мы корабль или цель при спавне
+            dist_to_ship = np.linalg.norm(pos - self.ship.position)
+            dist_to_goal = np.linalg.norm(pos - self.goal)
+            
+            if dist_to_ship < (radius + object_safe_zone) or dist_to_goal < (radius + object_safe_zone):
+                continue
+
+            # 2. Логика «Проходимости»:
+            # Теперь мы позволяем астероиду пересекать линию, но следим, 
+            # чтобы он не перекрывал её слишком сильно.
+            p1 = self.ship.position
+            p2 = self.goal
+            v = p2 - p1
+            w = pos - p1
+            t = np.clip(np.dot(w, v) / (np.dot(v, v) + 1e-8), 0, 1)
+            projection = p1 + t * v
+            dist_to_path = np.linalg.norm(pos - projection)
+
+            # Если астероид настолько велик, что перекрывает путь почти полностью, 
+            # оставляя меньше места, чем нужно для пролета корабля — отбрасываем его.
+            if dist_to_path < (radius - pass_margin):
+                continue 
+
+            # 3. Проверка на наслоение астероидов (опционально, для красоты)
+            overlap = False
+            for other in self.asteroids:
+                if np.linalg.norm(pos - other.position) < (radius + other.radius) * 0.7:
+                    overlap = True
+                    break
+            if overlap: continue
+
+            self.asteroids.append(Asteroid(pos, radius, angle))
 
         self.current_step = 0
         self.prev_distance = np.linalg.norm(self.ship.position - self.goal)
