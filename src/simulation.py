@@ -11,6 +11,7 @@ def watch_agent(env, agent_class, model_path):
     while running:
         state, _ = env.reset()
         done, truncated = False, False
+        episode_step = 0
         
         while not (done or truncated) and running:
             for event in pygame.event.get():
@@ -26,6 +27,20 @@ def watch_agent(env, agent_class, model_path):
             else:
                 action = action_out
             state, reward, done, truncated, _ = env.step(action)
+            episode_step += 1
+
+            if episode_step % 300 == 0:
+                out_of_bounds = bool(
+                    state is not None and (
+                        env.ship.position[0] < 0 or env.ship.position[0] > env.space_size[0]
+                        or env.ship.position[1] < 0 or env.ship.position[1] > env.space_size[1]
+                    )
+                )
+                print(
+                    f"watch step={episode_step}/{env.max_steps} "
+                    f"out_of_bounds={out_of_bounds} "
+                    f"ship=({env.ship.position[0]:.1f},{env.ship.position[1]:.1f})"
+                )
             
             renderer.render()
             

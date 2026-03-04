@@ -1,4 +1,4 @@
-episodes: 1000
+episodes: 10000
 lr: 0.001
 gamma: 0.99
 delta: 0.01

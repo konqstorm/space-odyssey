@@ -22,15 +22,15 @@ def reward_function(env):
     goal_dist = np.linalg.norm(goal_vec) + 1e-6
     goal_dir = goal_vec / goal_dist
     speed_to_goal = float(np.dot(env.ship.velocity, goal_dir))
-    goal_speed_reward = 0.12 * np.tanh(speed_to_goal / 5.0)
+    goal_speed_reward = 0.18 * np.tanh(speed_to_goal / 4.0)
 
     target_angle = np.arctan2(dy, dx)
     angle_error = target_angle - env.ship.angle
     angle_error = (angle_error + np.pi) % (2 * np.pi) - np.pi
-    align_cos_reward = 0.1 * np.cos(angle_error)
-    align_sin_penalty = -0.1 * abs(np.sin(angle_error))
-    ang_vel_abs_penalty = -0.1 * abs(env.ship.angular_velocity)
-    ang_vel_sq_penalty = -0.02 * (env.ship.angular_velocity ** 2) # штраф за "дрожание" при попытке стабилизации
+    align_cos_reward = 0.16 * np.cos(angle_error)
+    align_sin_penalty = -0.08 * abs(np.sin(angle_error))
+    ang_vel_abs_penalty = -0.06 * abs(env.ship.angular_velocity)
+    ang_vel_sq_penalty = -0.006 * (env.ship.angular_velocity ** 2) # штраф за "дрожание" при попытке стабилизации
     #reward += 0.01 * np.linalg.norm(env.ship.velocity)
 
     # --- Obstacle shaping: штрафуем опасную близость и "влет" в астероид ---
@@ -38,8 +38,13 @@ def reward_function(env):
     obstacle_approach_penalty = 0.0
     if env.asteroids:
         safe_surface_distance = 140.0
+        proximity_asteroid_count = 3
+        asteroids_sorted = sorted(
+            env.asteroids,
+            key=lambda asteroid: np.linalg.norm(asteroid.position - env.ship.position) - (env.ship.radius + asteroid.radius),
+        )
 
-        for asteroid in env.asteroids:
+        for asteroid in asteroids_sorted[:proximity_asteroid_count]:
             rel = asteroid.position - env.ship.position
             center_distance = np.linalg.norm(rel)
             surface_distance = center_distance - (env.ship.radius + asteroid.radius)
@@ -82,7 +87,7 @@ def reward_function(env):
             reward += collision_penalty
             break
     
-    if env.current_step >= env.max_steps:
+    if (env.current_step + 1) >= env.max_steps:
         timeout_penalty = -current_distance * 0.01
         reward += timeout_penalty
 

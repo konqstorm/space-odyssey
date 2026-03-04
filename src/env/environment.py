@@ -31,7 +31,7 @@ class Asteroid:
 
 
 class SpaceEnv(gym.Env):
-    def __init__(self, space_size=(1920, 1080), num_asteroids=5, max_steps=1000):
+    def __init__(self, space_size=(1920, 1080), num_asteroids=5, max_steps=3000):
         super().__init__()
         self.space_size = space_size
         self.num_asteroids = num_asteroids
@@ -50,6 +50,11 @@ class SpaceEnv(gym.Env):
         self.throttle_gain = 3.0
         self.throttle_center = 0.2
         self.reset()
+
+    def _is_out_of_bounds(self):
+        x, y = self.ship.position
+        width, height = self.space_size
+        return bool(x < 0.0 or x > width or y < 0.0 or y > height)
 
     def _map_forward_thrust(self, action_value):
         a = float(np.clip(action_value, -1.0, 1.0))
@@ -132,6 +137,7 @@ class SpaceEnv(gym.Env):
         self.ship.apply_thrust(forward_thrust, rot_thrust, dt)
         self.ship.update(dt)
         distance = np.linalg.norm(self.ship.position - self.goal)
+        out_of_bounds = self._is_out_of_bounds()
 
         reward = reward_function(self)
 
@@ -159,6 +165,7 @@ class SpaceEnv(gym.Env):
         info = {
             "termination_reason": termination_reason,
             "distance_to_goal": float(distance),
+            "out_of_bounds": out_of_bounds,
         }
         reward_components = getattr(self, "_last_reward_components", None)
         if isinstance(reward_components, dict):
