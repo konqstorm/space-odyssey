@@ -167,46 +167,146 @@ The environment terminates on goal, collision, or timeout, and the code assigns 
 | Collision | $\lVert p_t - p^{\text{ast}}\rVert_2 < r_{\text{ship}} + r_{\text{ast}}$ | $-200$ |
 | Timeout | episode ends by timeout (truncated) | $-0.01\,\lVert p_t - g\rVert_2$ |
 
----
+
+<!-- ## Reward shaping
+
+For non-terminal steps the reward is
+
+$$
+r_t =
+r_{\text{progress}}
++ r_{\text{velocity}}
++ r_{\text{alignment}}
++ r_{\text{angular}}
++ r_{\text{obstacles}}.
+$$
+
+### Progress
+
+$$
+r_{\text{progress}} = 0.3 \,\Delta d \, b(d_t),
+\qquad
+b(d_t)=1+\frac{\alpha}{1+(\text{dist\_norm}/d_0)^2},
+$$
+
+with $\alpha=1.2$, $d_0=0.12$.
+
+### Velocity toward goal
+
+Let $\hat g=\frac{g-p_t}{\|g-p_t\|}$ and $v_{\text{goal}}=v_t\cdot\hat g$.
+
+$$
+r_{\text{velocity}} = 0.18\,\tanh\!\left(\frac{v_{\text{goal}}}{4}\right).
+$$
+
+### Alignment
+
+Let $\theta_{\text{err}}$ be the heading error to the goal.
+
+$$
+r_{\text{alignment}} =
+0.16\cos(\theta_{\text{err}})
+-0.08|\sin(\theta_{\text{err}})|.
+$$
+
+### Angular velocity
+
+$$
+r_{\text{angular}} = -0.06|\omega| - 0.006\,\omega^2.
+$$
+
+### Obstacle avoidance
+
+For the **three closest asteroids** define surface distance
+
+$$
+d_{\text{surface}}=\|p_t-p^{\text{ast}}\|_2-(r_{\text{ship}}+r_{\text{ast}}).
+$$
+
+If $d_{\text{surface}}<d_{\text{safe}}$ with $d_{\text{safe}}=140$,
+
+$$
+danger=1-\text{clip}\!\left(\frac{d_{\text{surface}}}{d_{\text{safe}}},0,1\right),
+\qquad
+r_{\text{prox}}=-0.8\,danger^2.
+$$
+
+If the ship moves toward the asteroid ($v_{\text{ast}}=v_t\cdot\hat a>0$),
+
+$$
+r_{\text{approach}}=-0.12\,\frac{v_{\text{ast}}}{8}\,danger^2.
+$$ -->
 
 ### REINFORCE (Policy Gradient + Baseline)
 
 In this project the policy is a *squashed Gaussian*:
 $z_t \sim \mathcal{N}(\mu_\theta(o_t), \sigma_\theta(o_t))$, $a_t=\tanh(z_t)$.
 
-The REINFORCE gradient is estimated as
+Monte-Carlo returns are computed as
 
 $$
-\nabla_\theta J(\theta)=\mathbb{E}\left[\sum_{t=0}^{T-1}\nabla_\theta \log\pi_\theta(a_t|o_t)\,G_t\right],
-\qquad
 G_t=\sum_{k=t}^{T-1}\gamma^{k-t} r_k.
 $$
 
-A baseline $b(o_t)=V_\phi(o_t)$ is used (value network):
+A value baseline $V_\phi(o_t)$ is used to compute the advantage
 
 $$
-\nabla_\theta J(\theta)=\mathbb{E}\left[\sum_{t=0}^{T-1}\nabla_\theta \log\pi_\theta(a_t|o_t)\,(G_t-V_\phi(o_t))\right].
+\hat A_t = G_t - V_\phi(o_t).
 $$
 
-In code, $\mathbb{E}[\cdot]$ is approximated by empirical means over collected samples (hence `.mean()`).
+Because actions are squashed with $\tanh$, the log-probability includes the change-of-variables correction:
+
+$$
+\log \pi_\theta(a_t|o_t) =
+\log \mathcal{N}(z_t;\mu_\theta(o_t),\sigma_\theta(o_t))
+-
+\sum_i \log(1-a_{t,i}^2+\varepsilon),
+\quad z_t=\operatorname{atanh}(a_t).
+$$
+
+The policy is optimized using
+
+$$
+\mathcal{L}_\pi =
+-
+\mathbb{E}[\log \pi_\theta(a_t|o_t)\,\hat A_t]
+-
+\beta\,\mathbb{E}[H(\mathcal N(\mu_\theta,\sigma_\theta))],
+$$
+
+where $\beta$ is the entropy coefficient used to encourage exploration.
+
+In code, expectations $\mathbb{E}[\cdot]$ are approximated by empirical means over collected samples (hence `.mean()`).
 
 ### TRPO (Trust Region Policy Optimization)
 
 TRPO maximizes the surrogate objective
 
 $$
-L(\theta)=\mathbb{E}\left[r_t(\theta)\,A_t\right],
+L(\theta)=\mathbb{E}\left[r_t(\theta)\,\hat A_t\right],
 \qquad
-r_t(\theta)=\exp\!\left(\log\pi_\theta(a_t|o_t)-\log\pi_{\theta_{\text{old}}}(a_t|o_t)\right),
+r_t(\theta)=\exp\!\left(\log\pi_\theta(a_t|o_t)-\log\pi_{\theta_{\text{old}}}(a_t|o_t)\right).
 $$
 
-and enforces a trust region constraint using the KL between the *Gaussian pre-tanh* policies:
+In this implementation, $\log\pi_\theta(a_t|o_t)$ is the **tanh-squashed** log-probability (computed via $z_t=\operatorname{atanh}(a_t)$ and a $\tanh$ Jacobian correction, same as in REINFORCE).
+
+Advantages are computed using a value baseline and normalization:
+
+$$
+\hat A_t = \text{norm}(G_t) - V_\phi(o_t),
+\qquad
+\hat A_t \leftarrow \text{norm}(\hat A_t),
+$$
+
+where $\text{norm}(\cdot)$ denotes z-score normalization over the trajectory batch.
+
+A trust region constraint is enforced using the KL between the **Gaussian pre-tanh** policies:
 
 $$
 \mathbb{E}\left[D_{KL}\left(\mathcal{N}_{\theta_{\text{old}}}(\cdot|o_t)\ \|\ \mathcal{N}_{\theta}(\cdot|o_t)\right)\right]\le \delta.
 $$
 
-In `TRPOAgent.update`, the step direction is computed via conjugate gradient on a Hessian-vector product of the KL, and a line search accepts a step only if the surrogate improves and the KL constraint is satisfied.
+In `TRPOAgent.update`, the step direction is computed via conjugate gradient on a Hessian-vector product of the KL with damping ($H v \leftarrow H v + \text{cg\_damping}\,v$), followed by a backtracking line search that accepts a step only if $L(\theta)$ improves and the KL constraint is satisfied.
 
 ## Results
 
