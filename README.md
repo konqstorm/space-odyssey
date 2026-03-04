@@ -30,9 +30,7 @@ The environment returns an **observation vector** $o_t \in \mathbb{R}^d$.
 
 The observation dimension is
 
-$$
-d=2+2+1+1+2+3N=8+3N, \qquad N = \texttt{num\_asteroids}
-$$
+$d = 2 + 2 + 1 + 1 + 2 + 3N = 8 + 3N$, N = `num_asteroids`
 
 
 The components correspond to:
@@ -52,7 +50,7 @@ The action is $$a_t=(a_t^{\text{thrust}}, a_t^{\text{rot}})\in[-1,1]^2.$$
 
 #### Forward thrust remapping
 
-Let $\sigma(x)=\frac{1}{1+e^{-x}}$, $k=\texttt{throttle\_gain}$, $c=\texttt{throttle\_center}$, and $a=\mathrm{clip}(a_t^{\text{thrust}},-1,1)$. 
+Let $\sigma(x)=\frac{1}{1+e^{-x}}$, k=`throttle_gain`, c=`throttle_center`, and $a=\mathrm{clip}(a_t^{\text{thrust}},-1,1)$. 
 Then:
 $$
 u_t=\mathrm{clip}\left(
@@ -60,7 +58,6 @@ u_t=\mathrm{clip}\left(
 {\sigma(k(1-c))-\sigma(k(-1-c))+10^{-8}},
 \,0,\,1\right).
 $$
-
 The rotation channel is clipped:
 
 $$
@@ -144,10 +141,7 @@ The episode terminates with `termination_reason="asteroid"`.
 
 3) **Timeout**
 
-$$
-t \ge \text{max\_steps}
-$$
----
+$t \ge$ `max_steps`
 
 ## Reward function
 
@@ -156,17 +150,19 @@ Reward is computed by `reward_function(env)` in `src/env/reward.py` and returned
 Let:
 - $d_t = ||p_t - g||_2$ (distance to goal)
 - $\Delta d = d_{t-1} - d_t$ (progress)
-- $D = \sqrt{W^2 + H^2}$ with $(W, H) = \text{space\_size}$
-- $\text{dist\_norm} = \frac{d_t}{D + \varepsilon}$
+- $D = \sqrt{W^2 + H^2}$ with $(W, H)$ = `space_size`
+- `dist_norm`= $\frac{d_t}{D + \varepsilon}$
+
 ### Terminal events
 
 The environment terminates on goal, collision, or timeout, and the code assigns terminal rewards accordingly.
 
 | Event | Condition | Reward |
 |---|---|---:|
-| Goal reached | $\|\|p_t - g\|\|_2 < r_{\text{ship}} + 5$ | $+500$ |
-| Collision | $\|\|p_t - p^{\text{ast}}\|\|_2 < r_{\text{ship}} + r_{\text{ast}}$ | $-200$ |
-| Timeout | episode ends by timeout (truncated) | $-0.01\,\|\|p_t - g\|\|_2$ |
+| Goal reached | $\lVert p_t - g\rVert_2 < r_{\text{ship}} + 5$ | $+500$ |
+| Collision | $\lVert p_t - p^{\text{ast}}\rVert_2 < r_{\text{ship}} + r_{\text{ast}}$ | $-200$ |
+| Timeout | episode ends by timeout (truncated) | $-0.01\,\lVert p_t - g\rVert_2$ |
+
 ---
 
 ### REINFORCE (Policy Gradient + Baseline)
