@@ -52,8 +52,9 @@ The action is $$a_t=(a_t^{\text{thrust}}, a_t^{\text{rot}})\in[-1,1]^2.$$
 
 Let $\sigma(x)=\frac{1}{1+e^{-x}}$, k=`throttle_gain`, c=`throttle_center`, and $a=\mathrm{clip}(a_t^{\text{thrust}},-1,1)$. 
 Then:
+
 $$
-u_t=\mathrm{clip}\left(
+u_t=\text{clip}\left(
 \frac{\sigma(k(a-c))-\sigma(k(-1-c))}
 {\sigma(k(1-c))-\sigma(k(-1-c))+10^{-8}},
 \,0,\,1\right).
