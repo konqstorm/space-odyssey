@@ -17,6 +17,12 @@ def _build_trpo_agent(env, config):
 
 def _trpo_iterations(env, agent, config):
     episodes = int(config["episodes"])
+    batch_episodes = int(config.get("batch_episodes", 12))
+    batch_episodes = max(1, batch_episodes)
+
+    batch_trajectory = ([], [], [], [], [])
+    episodes_in_batch = 0
+
     for ep in range(episodes):
         state, _ = env.reset()
         done, truncated = False, False
@@ -24,6 +30,7 @@ def _trpo_iterations(env, agent, config):
         termination_reason = "unknown"
         reward_component_sums = {
             "reward_progress": 0.0,
+            "reward_goal_speed": 0.0,
             "reward_alignment": 0.0,
             "reward_wobble": 0.0,
             "reward_avoid": 0.0,
@@ -45,17 +52,29 @@ def _trpo_iterations(env, agent, config):
             state = next_state
             if done or truncated:
                 termination_reason = info.get("termination_reason", "unknown")
-            
-        agent.update(trajectory)
+
+        for idx in range(5):
+            batch_trajectory[idx].extend(trajectory[idx])
+        episodes_in_batch += 1
+
+        did_update = False
+        is_last_episode = (ep == episodes - 1)
+        if episodes_in_batch >= batch_episodes or is_last_episode:
+            agent.update(batch_trajectory)
+            batch_trajectory = ([], [], [], [], [])
+            episodes_in_batch = 0
+            did_update = True
         
         ep_reward = float(sum(trajectory[2]))
         success_rate = 100.0 if termination_reason == "goal" else 0.0
         comp_line = (
             f" | C: prog={reward_component_sums['reward_progress']:+7.1f}"
+            f" speed={reward_component_sums['reward_goal_speed']:+7.1f}"
             f" align={reward_component_sums['reward_alignment']:+7.1f}"
             f" wobble={reward_component_sums['reward_wobble']:+7.1f}"
             f" avoid={reward_component_sums['reward_avoid']:+7.1f}"
             f" term={reward_component_sums['reward_terminal']:+7.1f}"
+            f" upd={'Y' if did_update else 'N'}"
         )
         yield TrainStepResult(
             score=ep_reward,

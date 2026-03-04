@@ -18,6 +18,12 @@ def reward_function(env):
     # Добавляем форму награды за стабилизацию курса на цель
     dx = env.goal[0] - env.ship.position[0]
     dy = env.goal[1] - env.ship.position[1]
+    goal_vec = np.array([dx, dy], dtype=np.float32)
+    goal_dist = np.linalg.norm(goal_vec) + 1e-6
+    goal_dir = goal_vec / goal_dist
+    speed_to_goal = float(np.dot(env.ship.velocity, goal_dir))
+    goal_speed_reward = 0.12 * np.tanh(speed_to_goal / 5.0)
+
     target_angle = np.arctan2(dy, dx)
     angle_error = target_angle - env.ship.angle
     angle_error = (angle_error + np.pi) % (2 * np.pi) - np.pi
@@ -31,28 +37,24 @@ def reward_function(env):
     obstacle_proximity_penalty = 0.0
     obstacle_approach_penalty = 0.0
     if env.asteroids:
-        nearest_surface_distance = np.inf
-        nearest_vector = None
+        safe_surface_distance = 140.0
 
         for asteroid in env.asteroids:
             rel = asteroid.position - env.ship.position
             center_distance = np.linalg.norm(rel)
             surface_distance = center_distance - (env.ship.radius + asteroid.radius)
-            if surface_distance < nearest_surface_distance:
-                nearest_surface_distance = surface_distance
-                nearest_vector = rel
 
-        safe_surface_distance = 140.0
-        if nearest_surface_distance < safe_surface_distance:
-            danger = 1.0 - np.clip(nearest_surface_distance / safe_surface_distance, 0.0, 1.0)
-            obstacle_proximity_penalty = -0.8 * (danger ** 2)
+            if surface_distance >= safe_surface_distance:
+                continue
 
-            if nearest_vector is not None:
-                denom = np.linalg.norm(nearest_vector) + 1e-6
-                dir_to_asteroid = nearest_vector / denom
-                approach_speed = float(np.dot(env.ship.velocity, dir_to_asteroid))
-                if approach_speed > 0.0:
-                    obstacle_approach_penalty = -0.12 * (approach_speed / 8.0) * (danger ** 2)
+            danger = 1.0 - np.clip(surface_distance / safe_surface_distance, 0.0, 1.0)
+            obstacle_proximity_penalty += -0.8 * (danger ** 2)
+
+            denom = np.linalg.norm(rel) + 1e-6
+            dir_to_asteroid = rel / denom
+            approach_speed = float(np.dot(env.ship.velocity, dir_to_asteroid))
+            if approach_speed > 0.0:
+                obstacle_approach_penalty += -0.12 * (approach_speed / 8.0) * (danger ** 2)
 
     goal_bonus = 0.0
     collision_penalty = 0.0
@@ -60,6 +62,7 @@ def reward_function(env):
 
     reward = (
         progress_reward
+        + goal_speed_reward
         + align_cos_reward
         + align_sin_penalty
         + ang_vel_abs_penalty
@@ -85,6 +88,7 @@ def reward_function(env):
 
     env._last_reward_components = {
         "reward_progress": float(progress_reward),
+        "reward_goal_speed": float(goal_speed_reward),
         "reward_alignment": float(align_cos_reward + align_sin_penalty),
         "reward_wobble": float(ang_vel_abs_penalty + ang_vel_sq_penalty),
         "reward_avoid": float(obstacle_proximity_penalty + obstacle_approach_penalty),
