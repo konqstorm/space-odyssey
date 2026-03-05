@@ -257,21 +257,15 @@ $$
 Because actions are squashed with $\tanh$, the log-probability includes the change-of-variables correction:
 
 $$
-\log \pi_\theta(a_t|o_t) =
-\log \mathcal{N}(z_t;\mu_\theta(o_t),\sigma_\theta(o_t))
--
-\sum_i \log(1-a_{t,i}^2+\varepsilon),
-\quad z_t=\operatorname{atanh}(a_t).
+\log \pi_\theta(a_t|o_t) = \log \mathcal{N}(z_t;\mu_\theta(o_t),\sigma_\theta(o_t)) - \sum_i \log(1-a_{t,i}^2+\epsilon)
 $$
+
+где $z_t = \text{atanh}(a_t)$.
 
 The policy is optimized using
 
 $$
-\mathcal{L}_\pi =
--
-\mathbb{E}[\log \pi_\theta(a_t|o_t)\,\hat A_t]
--
-\beta\,\mathbb{E}[H(\mathcal N(\mu_\theta,\sigma_\theta))],
+\mathcal{L}_\pi = - \mathbb{E}[\log \pi_\theta(a_t|o_t)\,\hat A_t] - \beta\,\mathbb{E}[H(\mathcal N(\mu_\theta,\sigma_\theta))],
 $$
 
 where $\beta$ is the entropy coefficient used to encourage exploration.
@@ -288,7 +282,7 @@ L(\theta)=\mathbb{E}\left[r_t(\theta)\,\hat A_t\right],
 r_t(\theta)=\exp\!\left(\log\pi_\theta(a_t|o_t)-\log\pi_{\theta_{\text{old}}}(a_t|o_t)\right).
 $$
 
-In this implementation, $\log\pi_\theta(a_t|o_t)$ is the **tanh-squashed** log-probability (computed via $z_t=\operatorname{atanh}(a_t)$ and a $\tanh$ Jacobian correction, same as in REINFORCE).
+In this implementation, $\log\pi_\theta(a_t|o_t)$ is the **tanh-squashed** log-probability (computed via $z_t=\text{atanh}(a_t)$  and a $\tanh$ Jacobian correction, same as in REINFORCE).
 
 Advantages are computed using a value baseline and normalization:
 
@@ -306,7 +300,7 @@ $$
 \mathbb{E}\left[D_{KL}\left(\mathcal{N}_{\theta_{\text{old}}}(\cdot|o_t)\ \|\ \mathcal{N}_{\theta}(\cdot|o_t)\right)\right]\le \delta.
 $$
 
-In `TRPOAgent.update`, the step direction is computed via conjugate gradient on a Hessian-vector product of the KL with damping ($H v \leftarrow H v + \text{cg\_damping}\,v$), followed by a backtracking line search that accepts a step only if $L(\theta)$ improves and the KL constraint is satisfied.
+In `TRPOAgent.update`, the step direction is computed via conjugate gradient on a Hessian-vector product of the KL with damping ($H v \leftarrow H v + $ *cg_damping v*), followed by a backtracking line search that accepts a step only if $L(\theta)$ improves and the KL constraint is satisfied.
 
 ## Results
 
