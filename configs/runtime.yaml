@@ -2,6 +2,6 @@ torch_num_threads: 12
 seed: null
 watch:
   agent: trpo
-  model_path: runs/20260303_182312_trpo/best_model_trpo.pth
+  model_path: runs/20260307_034749_trpo/last_trpo.pth
 train:
   runs_dir: runs

@@ -41,8 +41,15 @@ class SpaceEnv(gym.Env):
             low=np.array([-1.0, -1.0]), high=np.array([1.0, 1.0]), dtype=np.float32
         )
 
-        # X, Y and radius for each asteroid (num_asteroids * 3)
-        obs_dim = 2 + 2 + 1 + 1 + 2 + self.num_asteroids * 3
+        self.asteroid_feature_dim = 5
+        self.base_feature_dim = 18
+        self.nearest_rel_vel_asteroids = 2
+        self.rel_vel_feature_dim = 2
+        obs_dim = (
+            self.base_feature_dim
+            + self.num_asteroids * self.asteroid_feature_dim
+            + self.nearest_rel_vel_asteroids * self.rel_vel_feature_dim
+        )
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
@@ -133,8 +140,11 @@ class SpaceEnv(gym.Env):
         else:
             ship_square, goal_square = right_square, left_square
 
-        self.ship = Ship(self._uniform_point_in_box(*ship_square))
+        ship_pos = self._uniform_point_in_box(*ship_square)
         self.goal = self._uniform_point_in_box(*goal_square)
+        to_goal = self.goal - ship_pos
+        start_angle = float(np.arctan2(to_goal[1], to_goal[0]))
+        self.ship = Ship(ship_pos, angle=start_angle)
 
         self.asteroids = []
         
@@ -193,6 +203,21 @@ class SpaceEnv(gym.Env):
         self.current_step = 0
         self.prev_distance = np.linalg.norm(self.ship.position - self.goal)
         self.last_action = np.array([0.0, 0.0])
+        dx = self.goal[0] - self.ship.position[0]
+        dy = self.goal[1] - self.ship.position[1]
+        target_angle = np.arctan2(dy, dx)
+        angle_error = target_angle - self.ship.angle
+        self.prev_angle_error = (angle_error + np.pi) % (2 * np.pi) - np.pi
+        goal_vec = np.array([dx, dy], dtype=np.float32)
+        goal_dir = goal_vec / (np.linalg.norm(goal_vec) + 1e-6)
+        self.prev_speed_to_goal = float(np.dot(self.ship.velocity, goal_dir))
+        self.prev_angular_velocity = float(self.ship.angular_velocity)
+        self._prev_turn_angle = float(self.ship.angle)
+        self._turn_streak_sign = 0
+        self._turn_streak_angle = 0.0
+        self._out_of_bounds_steps = 0
+        self._asteroid_seen_ahead = [False] * len(self.asteroids)
+        self._asteroid_pass_rewarded = [False] * len(self.asteroids)
 
         return get_observation(self), {}
 
@@ -209,6 +234,10 @@ class SpaceEnv(gym.Env):
         self.ship.update(dt)
         distance = np.linalg.norm(self.ship.position - self.goal)
         out_of_bounds = self._is_out_of_bounds()
+        if out_of_bounds:
+            self._out_of_bounds_steps += 1
+        else:
+            self._out_of_bounds_steps = 0
 
         reward = reward_function(self)
 
@@ -226,12 +255,23 @@ class SpaceEnv(gym.Env):
                 termination_reason = "asteroid"
                 break
 
+        if out_of_bounds and not done:
+            done = True
+            termination_reason = "boundary"
+
         self.current_step += 1
         if self.current_step >= self.max_steps and not done:
             truncated = True
             termination_reason = "timeout"
 
-        self.prev_distance = distance
+        dx = self.goal[0] - self.ship.position[0]
+        dy = self.goal[1] - self.ship.position[1]
+        target_angle = np.arctan2(dy, dx)
+        angle_error = target_angle - self.ship.angle
+        current_angle_error = (angle_error + np.pi) % (2 * np.pi) - np.pi
+        goal_vec = np.array([dx, dy], dtype=np.float32)
+        goal_dir = goal_vec / (np.linalg.norm(goal_vec) + 1e-6)
+        current_speed_to_goal = float(np.dot(self.ship.velocity, goal_dir))
 
         info = {
             "termination_reason": termination_reason,
@@ -241,4 +281,9 @@ class SpaceEnv(gym.Env):
         reward_components = getattr(self, "_last_reward_components", None)
         if isinstance(reward_components, dict):
             info.update(reward_components)
-        return get_observation(self), reward, done, truncated, info
+        observation = get_observation(self)
+        self.prev_distance = distance
+        self.prev_angle_error = current_angle_error
+        self.prev_speed_to_goal = current_speed_to_goal
+        self.prev_angular_velocity = float(self.ship.angular_velocity)
+        return observation, reward, done, truncated, info

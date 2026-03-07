@@ -1,8 +1,11 @@
-episodes: 10000
+episodes: 30000
 lr: 0.001
+value_lr: 0.0003
 gamma: 0.99
 delta: 0.01
 cg_damping: 0.1
 cg_steps: 10
 line_search_steps: 10
-value_update_steps: 10
+value_update_steps: 30
+value_grad_clip: 1.0
+ev_ema_beta: 0.9

@@ -1,4 +1,6 @@
+import csv
 import inspect
+import json
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -132,27 +134,54 @@ def run_training_loop(
     avg_rewards = []
     termination_totals: dict[str, int] = {}
 
-    for step in run_iterations(env, agent, run_config):
-        if not isinstance(step, TrainStepResult):
-            raise TypeError("Iteration must return TrainStepResult")
+    metrics_path = run_dir / "metrics.csv"
+    metrics_fields = [
+        "batch_idx",
+        "score",
+        "avg_reward",
+        "success_rate",
+        "best_score_so_far",
+        "termination_counts_json",
+    ]
 
-        print(step.log_line)
+    with metrics_path.open("w", encoding="utf-8", newline="") as metrics_file:
+        metrics_writer = csv.DictWriter(metrics_file, fieldnames=metrics_fields)
+        metrics_writer.writeheader()
 
-        batch_indices.append(int(step.batch_idx))
-        success_rates.append(float(step.success_rate))
-        avg_rewards.append(float(step.avg_reward))
-        for reason, count in step.termination_counts.items():
-            termination_totals[reason] = termination_totals.get(reason, 0) + int(count)
+        for step in run_iterations(env, agent, run_config):
+            if not isinstance(step, TrainStepResult):
+                raise TypeError("Iteration must return TrainStepResult")
 
-        agent.save(str(run_dir / last_model_name))
+            print(step.log_line)
 
-        if step.score > best_score:
-            best_score = step.score
-            agent.save(str(run_dir / best_model_name))
-            print(
-                f"--> Новая лучшая модель {algorithm_name.upper()} сохранена! "
-                f"Score = {best_score:.2f}"
+            batch_indices.append(int(step.batch_idx))
+            success_rates.append(float(step.success_rate))
+            avg_rewards.append(float(step.avg_reward))
+            for reason, count in step.termination_counts.items():
+                termination_totals[reason] = termination_totals.get(reason, 0) + int(count)
+
+            agent.save(str(run_dir / last_model_name))
+
+            if step.score > best_score:
+                best_score = step.score
+                agent.save(str(run_dir / best_model_name))
+                print(f"--> New best {algorithm_name.upper()} model saved! Score = {best_score:.2f}")
+
+            metrics_writer.writerow(
+                {
+                    "batch_idx": int(step.batch_idx),
+                    "score": float(step.score),
+                    "avg_reward": float(step.avg_reward),
+                    "success_rate": float(step.success_rate),
+                    "best_score_so_far": float(best_score),
+                    "termination_counts_json": json.dumps(
+                        step.termination_counts,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                }
             )
+            metrics_file.flush()
 
     if batch_indices:
         _plot_curves(run_dir, batch_indices, success_rates, avg_rewards)

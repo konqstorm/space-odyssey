@@ -16,7 +16,6 @@ class Renderer:
 
     def render(self):
         self.screen.fill((0, 0, 0))
-        pygame.draw.circle(self.screen, (0, 255, 0), self.env.goal.astype(int), 10) # Сделал цель чуть заметнее
 
         # Отрисовка астероидов
         for asteroid in self.env.asteroids:
@@ -27,6 +26,12 @@ class Renderer:
                 rotated = pygame.transform.rotozoom(img, -(90 + math.degrees(asteroid.angle)), 1.0)
                 rect = rotated.get_rect(center=pos)
                 self.screen.blit(rotated, rect)
+
+            # Отрисовка цели поверх астероидов, чтобы она всегда была видна
+            goal_pos = self.env.goal.astype(int)
+            pygame.draw.circle(self.screen, (20, 20, 20), goal_pos, 12)
+            pygame.draw.circle(self.screen, (0, 255, 0), goal_pos, 10)
+            pygame.draw.circle(self.screen, (255, 255, 255), goal_pos, 10, 1)
 
         # Отрисовка корабля
         ship_pos = self.env.ship.position.astype(int)

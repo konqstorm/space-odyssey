@@ -1,10 +1,10 @@
 import torch
 import torch.optim as optim
+import torch.nn.utils as nn_utils
 from torch.distributions import MultivariateNormal
 import numpy as np
 import copy
 from .policy import PolicyNetwork
-from .value import ValueNetwork
 from .value_2 import ValueNetwork2
 
 
@@ -13,12 +13,15 @@ class TRPOAgent:
         self,
         env,
         lr=1e-3,
+        value_lr=None,
         gamma=0.99,
         delta=0.01,
         cg_damping=0.1,
         cg_steps=10,
         line_search_steps=10,
         value_update_steps=10,
+        value_grad_clip=None,
+        policy_variant="shallow",
     ):
         self.env = env
         self.gamma = gamma
@@ -27,19 +30,38 @@ class TRPOAgent:
         self.cg_steps = cg_steps
         self.line_search_steps = line_search_steps
         self.value_update_steps = value_update_steps
+        self.value_grad_clip = value_grad_clip
         # device selection
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.policy = PolicyNetwork(env.observation_space.shape[0]).to(self.device)
+        self.policy = PolicyNetwork(env.observation_space.shape[0], policy_variant=policy_variant).to(self.device)
         self.value = ValueNetwork2(env.observation_space.shape[0]).to(self.device)
+        if value_lr is None:
+            value_lr = lr
         self.policy_optimizer = optim.Adam(self.policy.parameters(), lr=lr)
-        self.value_optimizer = optim.Adam(self.value.parameters(), lr=lr)
+        self.value_optimizer = optim.Adam(self.value.parameters(), lr=value_lr)
 
-    def compute_returns(self, rewards):
+    @staticmethod
+    def _explained_variance(y_true, y_pred):
+        y_true = y_true.detach()
+        y_pred = y_pred.detach()
+        var_y = torch.var(y_true)
+        if torch.isnan(var_y) or var_y < 1e-8:
+            return 0.0
+        ev = 1.0 - torch.var(y_true - y_pred) / (var_y + 1e-8)
+        return float(torch.clamp(ev, -10.0, 1.0).item())
+
+    def compute_returns(self, rewards, dones=None):
         rewards_t = torch.as_tensor(rewards, dtype=torch.float32, device=self.device)
+        if dones is None:
+            dones_t = torch.zeros_like(rewards_t, dtype=torch.float32, device=self.device)
+        else:
+            dones_t = torch.as_tensor(dones, dtype=torch.float32, device=self.device)
         returns = []
         running_return = torch.tensor(0.0, device=self.device)
-        for reward in reversed(rewards_t):
+        for reward, done in zip(reversed(rewards_t), reversed(dones_t)):
+            if done > 0.5:
+                running_return = torch.tensor(0.0, device=self.device)
             running_return = reward + self.gamma * running_return
             returns.insert(0, running_return)
         return torch.stack(returns).float()
@@ -142,7 +164,7 @@ class TRPOAgent:
         return x
 
     def update(self, trajectory):
-        states, actions, rewards, log_probs, next_states = trajectory
+        states, actions, rewards, log_probs, next_states, dones = trajectory
         self.old_policy = copy.deepcopy(self.policy)
         # ensure old_policy on correct device and eval mode
         try:
@@ -154,14 +176,10 @@ class TRPOAgent:
         states_t = torch.from_numpy(np.stack(states)).float().to(self.device)
         actions_t = torch.from_numpy(np.stack(actions)).float().to(self.device)
 
-        returns = self.compute_returns(rewards)
-        if returns.numel() > 1:
-            returns_norm = (returns - returns.mean()) / (returns.std() + 1e-8)
-        else:
-            returns_norm = returns
+        returns = self.compute_returns(rewards, dones)
 
         values_detached = self.value(states_t).squeeze(-1).detach()
-        advantages = returns_norm - values_detached
+        advantages = returns - values_detached
         if advantages.numel() > 1:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         # stack/convert log_probs safely and detach
@@ -180,8 +198,16 @@ class TRPOAgent:
             return self.hessian_vector_product(v, states_t) + self.cg_damping * v
         step_dir = self.conjugate_gradient(Hvp, grad, nsteps=self.cg_steps)
         shs = 0.5 * (step_dir @ Hvp(step_dir))
+        update_info = {
+            "value_loss": float("nan"),
+            "explained_variance": float("nan"),
+        }
         if shs <= 0:
-            return
+            with torch.no_grad():
+                pred_values = self.value(states_t).squeeze(-1)
+                update_info["value_loss"] = float((pred_values - returns).pow(2).mean().item())
+                update_info["explained_variance"] = self._explained_variance(returns, pred_values)
+            return update_info
         lm = torch.sqrt(shs / self.delta)
         full_step = step_dir / (lm + 1e-12)
         old_params = torch.cat([p.view(-1) for p in self.policy.parameters()]).detach()
@@ -211,13 +237,22 @@ class TRPOAgent:
                 p_numel = p.numel()
                 p.data.copy_(old_params[idx:idx+p_numel].view(p.shape))
                 idx += p_numel
-        values_target = returns_norm.detach()
+        values_target = returns.detach()
+        value_loss = torch.tensor(0.0, device=self.device)
         for _ in range(self.value_update_steps):
             self.value_optimizer.zero_grad()
             values = self.value(states_t).squeeze(-1)
             value_loss = (values - values_target).pow(2).mean()
             value_loss.backward()
+            if self.value_grad_clip is not None and self.value_grad_clip > 0:
+                nn_utils.clip_grad_norm_(self.value.parameters(), float(self.value_grad_clip))
             self.value_optimizer.step()
+
+        with torch.no_grad():
+            pred_values = self.value(states_t).squeeze(-1)
+            update_info["value_loss"] = float(value_loss.item())
+            update_info["explained_variance"] = self._explained_variance(values_target, pred_values)
+        return update_info
 
     def select_action(self, state, deterministic=False):
         state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
