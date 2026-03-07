@@ -16,7 +16,7 @@ class Ship:
     def apply_thrust(self, forward_thrust, rot_thrust, dt):
         direction = np.array([np.cos(self.angle), np.sin(self.angle)])
         self.velocity += forward_thrust * direction * dt
-        self.angular_velocity += rot_thrust * dt
+        self.angular_velocity += rot_thrust * dt * 0.75
 
     def update(self, dt):
         self.angle += self.angular_velocity * dt
@@ -42,7 +42,7 @@ class SpaceEnv(gym.Env):
         )
 
         self.asteroid_feature_dim = 5
-        self.base_feature_dim = 18
+        self.base_feature_dim = 19
         self.nearest_rel_vel_asteroids = 2
         self.rel_vel_feature_dim = 2
         obs_dim = (
@@ -56,6 +56,7 @@ class SpaceEnv(gym.Env):
 
         self.throttle_gain = 3.0
         self.throttle_center = 0.2
+        self.max_angular_speed_kill = 5.0
         self.reset()
 
     def _is_out_of_bounds(self):
@@ -259,6 +260,10 @@ class SpaceEnv(gym.Env):
             done = True
             termination_reason = "boundary"
 
+        if abs(self.ship.angular_velocity) > self.max_angular_speed_kill and not done:
+            done = True
+            termination_reason = "spin"
+
         self.current_step += 1
         if self.current_step >= self.max_steps and not done:
             truncated = True
@@ -277,6 +282,7 @@ class SpaceEnv(gym.Env):
             "termination_reason": termination_reason,
             "distance_to_goal": float(distance),
             "out_of_bounds": out_of_bounds,
+            "angular_velocity": float(self.ship.angular_velocity),
         }
         reward_components = getattr(self, "_last_reward_components", None)
         if isinstance(reward_components, dict):
@@ -287,3 +293,4 @@ class SpaceEnv(gym.Env):
         self.prev_speed_to_goal = current_speed_to_goal
         self.prev_angular_velocity = float(self.ship.angular_velocity)
         return observation, reward, done, truncated, info
+

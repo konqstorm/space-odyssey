@@ -1,23 +1,33 @@
 import numpy as np
 
+GOAL_TERMINAL_REWARD = 600.0
+ASTEROID_TERMINAL_PENALTY = -500.0
+BOUNDARY_TERMINAL_PENALTY = -450.0
+SPIN_TERMINAL_PENALTY = -1000.0
+TIMEOUT_BASE_PENALTY = -300.0
+
 
 def _termination_reward(env, current_distance):
-    # Keep order consistent with env.step: goal -> asteroid -> boundary -> timeout.
+    # Keep order consistent with env.step: goal -> asteroid -> boundary -> spin -> timeout.
     if current_distance < env.ship.radius + 5.0:
-        return 320.0
+        return GOAL_TERMINAL_REWARD
 
     for asteroid in env.asteroids:
         if np.linalg.norm(env.ship.position - asteroid.position) < env.ship.radius + asteroid.radius:
-            return -240.0
+            return ASTEROID_TERMINAL_PENALTY
 
     x, y = float(env.ship.position[0]), float(env.ship.position[1])
     width, height = env.space_size
     if x < 0.0 or x > width or y < 0.0 or y > height:
-        return -180.0
+        return BOUNDARY_TERMINAL_PENALTY
+
+    max_ang_speed = float(getattr(env, "max_angular_speed_kill", np.inf))
+    if abs(float(env.ship.angular_velocity)) > max_ang_speed:
+        return SPIN_TERMINAL_PENALTY
 
     if (env.current_step + 1) >= env.max_steps:
-        # Mild timeout penalty that scales with remaining distance.
-        return -0.03 * float(current_distance)
+        # Strong timeout penalty with distance-dependent component.
+        return TIMEOUT_BASE_PENALTY - 0.05 * float(current_distance)
 
     return 0.0
 
@@ -104,7 +114,7 @@ def reward_function(env):
     # 6) Terminal shaping.
     reward_terminal = float(_termination_reward(env, current_distance))
 
-    reward_total = (
+    non_terminal_reward = (
         reward_progress
         + reward_goal_speed
         + reward_alignment
@@ -112,8 +122,8 @@ def reward_function(env):
         + reward_wobble
         + reward_bounds
         + reward_avoid
-        + reward_terminal
     )
+    reward_total = non_terminal_reward + reward_terminal
 
     env._last_reward_components = {
         "reward_progress": float(reward_progress),
@@ -128,3 +138,6 @@ def reward_function(env):
     }
 
     return float(reward_total)
+
+
+

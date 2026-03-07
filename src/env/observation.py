@@ -37,6 +37,10 @@ def get_observation(env):
     delta_angle_error = angle_error - prev_angle_error
     delta_angle_error = (delta_angle_error + np.pi) % (2 * np.pi) - np.pi
 
+    # Approximate angular acceleration from finite difference.
+    prev_ang_vel = float(getattr(env, "prev_angular_velocity", env.ship.angular_velocity))
+    ang_acc = (float(env.ship.angular_velocity) - prev_ang_vel) / 0.1
+
     speed_to_goal = float(np.dot(env.ship.velocity, goal_dir))
     prev_speed_to_goal = float(getattr(env, "prev_speed_to_goal", speed_to_goal))
     delta_speed_to_goal = speed_to_goal - prev_speed_to_goal
@@ -51,6 +55,7 @@ def get_observation(env):
     vx_scale = 20.0
     vy_scale = 20.0
     ang_vel_scale = 2.0
+    ang_acc_scale = 10.0
     delta_angle_scale = np.pi
     delta_speed_scale = 10.0
 
@@ -104,6 +109,7 @@ def get_observation(env):
             sin_err,
             cos_err,
             env.ship.angular_velocity / ang_vel_scale,
+            ang_acc / ang_acc_scale,
             dist / max_dist,
             prev_forward,
             prev_torque,

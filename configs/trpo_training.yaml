@@ -1,4 +1,4 @@
-episodes: 30000
+episodes: 20000
 lr: 0.001
 value_lr: 0.0003
 gamma: 0.99
@@ -9,3 +9,4 @@ line_search_steps: 10
 value_update_steps: 30
 value_grad_clip: 1.0
 ev_ema_beta: 0.9
+
